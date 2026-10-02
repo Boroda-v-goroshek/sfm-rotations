@@ -1,0 +1,5 @@
+[core]
+    autostage = true
+    remote = remote-server
+['remote "remote-server"']
+    url = url
