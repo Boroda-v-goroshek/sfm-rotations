@@ -11,6 +11,14 @@ readme = "README.md"
 requires-python = ">=3.10,<3.11"
 
 dependencies = [
+  "numpy",
+  "pandas",
+  "pillow",
+  "torch",
+  "torchvision",
+  "transformers",
+  "tqdm",
+  "scikit-learn",
 ]
 
 [dependency-groups]
