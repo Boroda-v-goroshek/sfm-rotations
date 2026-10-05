@@ -1,0 +1,20 @@
+data_root: "data"
+checkpoints: "checkpoints"
+backbone: "facebook/dinov2-base"
+embedding_dim: 256
+freeze_backbone: false
+epochs: 10
+lr: 2e-05
+loss_weights: [0.4, 0.3, 0.3]
+val_fraction: 0.2
+num_workers: 0
+seed: 42
+batch_size: 21
+clusters_per_batch: 6
+outlier_fraction: 0.125
+val_batch_size: 16
+val_clusters_per_batch: 3
+val_outlier_fraction: 0.25
+eval_batch_size: 32
+cluster_distance: 0.3
+min_cluster_size: 3

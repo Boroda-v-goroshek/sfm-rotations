@@ -19,6 +19,8 @@ dependencies = [
   "transformers",
   "tqdm",
   "scikit-learn",
+  "dvc",
+  "hydra-core",
 ]
 
 [dependency-groups]

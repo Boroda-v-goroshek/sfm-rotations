@@ -1,11 +1,12 @@
-import argparse
 import json
 import random
 from pathlib import Path
 
+import hydra
 import numpy as np
 import pandas as pd
 import torch
+from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from torch.utils.data import Subset
 from tqdm import tqdm
@@ -41,38 +42,7 @@ def seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def parse_args() -> argparse.Namespace:
-    """
-    Parse command line arguments.
 
-    Returns
-    -------
-    parsed arguments
-
-    """
-    parser = argparse.ArgumentParser(description="Train SfM scene/pose model")
-    parser.add_argument("--data-root", type=Path, default=Path("image-matching-challenge-2025"))
-    parser.add_argument("--checkpoints", type=Path, default=Path("checkpoints"))
-    parser.add_argument("--backbone", default="facebook/dinov2-base")
-    parser.add_argument("--embedding-dim", type=int, default=256)
-    parser.add_argument("--freeze-backbone", action="store_true")
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--lr", type=float, default=2e-5)
-    parser.add_argument("--loss-weights", type=float, nargs=3, default=[0.4, 0.3, 0.3])
-    parser.add_argument("--val-fraction", type=float, default=0.2)
-    parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--seed", type=int, default=42)
-    # Батч: round(batch_size * outlier_fraction) outliers + clusters_per_batch сцен поровну.
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--clusters-per-batch", type=int, default=7)
-    parser.add_argument("--outlier-fraction", type=float, default=0.125)
-    parser.add_argument("--val-batch-size", type=int, default=16)
-    parser.add_argument("--val-clusters-per-batch", type=int, default=3)
-    parser.add_argument("--val-outlier-fraction", type=float, default=0.25)
-    parser.add_argument("--eval-batch-size", type=int, default=32)
-    parser.add_argument("--cluster-distance", type=float, default=0.3, help="Порог косинусного расстояния")
-    parser.add_argument("--min-cluster-size", type=int, default=3, help="Кластеры меньше -> outliers")
-    return parser.parse_args()
 
 
 def run_epoch(
@@ -185,14 +155,17 @@ def collect_outputs(model: SfMModel, loader: DataLoader, device: str, meta: pd.D
     )
 
 
-def main() -> None:
+@hydra.main(version_base=None, config_path="../../configs", config_name="baseline")
+def main(cfg: DictConfig) -> None:
     """Train the model, compute validation metrics and save checkpoints every epoch."""
-    args = parse_args()
-    seed_everything(args.seed)
+    seed_everything(cfg.seed)
 
-    df = load_labels(args.data_root)
+    data_root = Path(cfg.data_root)
+    checkpoints = Path(cfg.checkpoints)
+
+    df = load_labels(data_root)
     cluster_ids = df["scene_label"].tolist()
-    train_indices, val_indices = train_val_split_by_cluster(cluster_ids, val_fraction=args.val_fraction, seed=args.seed)
+    train_indices, val_indices = train_val_split_by_cluster(cluster_ids, val_fraction=cfg.val_fraction, seed=cfg.seed)
 
     train_transform, val_transform = build_transforms()
     # Sampler отдаёт глобальные индексы строк df, поэтому оба датасета строятся по полному df.
@@ -202,18 +175,18 @@ def main() -> None:
     train_sampler = ContrastiveBatchSampler(
         train_indices,
         cluster_ids,
-        batch_size=args.batch_size,
-        clusters_per_batch=args.clusters_per_batch,
-        outlier_fraction=args.outlier_fraction,
-        seed=args.seed,
+        batch_size=cfg.batch_size,
+        clusters_per_batch=cfg.clusters_per_batch,
+        outlier_fraction=cfg.outlier_fraction,
+        seed=cfg.seed,
     )
     val_sampler = ContrastiveBatchSampler(
         val_indices,
         cluster_ids,
-        batch_size=args.val_batch_size,
-        clusters_per_batch=args.val_clusters_per_batch,
-        outlier_fraction=args.val_outlier_fraction,
-        seed=args.seed,
+        batch_size=cfg.val_batch_size,
+        clusters_per_batch=cfg.val_clusters_per_batch,
+        outlier_fraction=cfg.val_outlier_fraction,
+        seed=cfg.seed,
     )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -221,42 +194,42 @@ def main() -> None:
     train_loader = DataLoader(
         train_dataset,
         batch_sampler=train_sampler,
-        num_workers=args.num_workers,
+        num_workers=cfg.num_workers,
         pin_memory=pin_memory,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_sampler=val_sampler,
-        num_workers=args.num_workers,
+        num_workers=cfg.num_workers,
         pin_memory=pin_memory,
     )
 
     # Последовательный проход по всей валидации для метрик (sampler пропускает часть изображений).
     eval_loader = DataLoader(
         Subset(val_dataset, val_indices),
-        batch_size=args.eval_batch_size,
+        batch_size=cfg.eval_batch_size,
         shuffle=False,
-        num_workers=args.num_workers,
+        num_workers=cfg.num_workers,
         pin_memory=pin_memory,
     )
     eval_meta = df.iloc[val_indices]
-    thresholds = load_thresholds(args.data_root)
+    thresholds = load_thresholds(data_root)
 
     print(f"device: {device}")
     model = SfMModel(
-        backbone_name=args.backbone,
-        embedding_dim=args.embedding_dim,
-        freeze_backbone=args.freeze_backbone,
+        backbone_name=cfg.backbone,
+        embedding_dim=cfg.embedding_dim,
+        freeze_backbone=cfg.freeze_backbone,
     ).to(device)
-    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr)
+    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=cfg.lr)
 
-    args.checkpoints.mkdir(parents=True, exist_ok=True)
-    loss_weights = tuple(args.loss_weights)
+    checkpoints.mkdir(parents=True, exist_ok=True)
+    loss_weights = tuple(cfg.loss_weights)
     best_score = float("-inf")
 
-    for epoch in range(args.epochs):
+    for epoch in range(cfg.epochs):
         train_sampler.set_epoch(epoch)
-        desc = f"Epoch {epoch + 1}/{args.epochs}"
+        desc = f"Epoch {epoch + 1}/{cfg.epochs}"
 
         train_loss = run_epoch(model, train_loader, device, loss_weights, f"{desc} train", optimizer)
         print(f"Epoch {epoch + 1}: train loss={train_loss:.5f}")
@@ -268,22 +241,22 @@ def main() -> None:
         metrics = compute_all_metrics(
             outputs,
             thresholds,
-            distance_threshold=args.cluster_distance,
-            min_cluster_size=args.min_cluster_size,
+            distance_threshold=cfg.cluster_distance,
+            min_cluster_size=cfg.min_cluster_size,
         )
         metrics.update({"train/loss": train_loss, "val/loss": val_loss, "epoch": epoch + 1})
         print(f"Epoch {epoch + 1} metrics:\n{format_metrics(metrics)}")
 
-        with open(args.checkpoints / f"metrics_epoch{epoch + 1:03d}.json", "w") as f:
+        with open(checkpoints / f"metrics_epoch{epoch + 1:03d}.json", "w") as f:
             json.dump(metrics, f, indent=2, ensure_ascii=False)
 
         checkpoint = {"model": model.state_dict(), "epoch": epoch + 1, "metrics": metrics}
-        torch.save(checkpoint, args.checkpoints / "last.pt")
+        torch.save(checkpoint, checkpoints / "last.pt")
 
         score = metrics.get("imc/score", float("-inf"))
         if score > best_score:
             best_score = score
-            torch.save(checkpoint, args.checkpoints / "best.pt")
+            torch.save(checkpoint, checkpoints / "best.pt")
             print(f"New best imc/score={score:.4f}")
 
 
