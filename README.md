@@ -47,56 +47,243 @@ git push origin <ветка, которую хотите запушить>
 
 #### Гоняем pre-commit
 
-- Использование (из root):
+- Использование (из корня репоса):
 
 ```
 pre-commit run -a
 ```
 
+## Работа с DVC
+
+### Первый запуск
+
+```bash
+# генерируете ключ и кидаете публичный в группу. админы добавят на сервер, и вы сможете пользоваться DVC
+ssh-keygen -t rsa -b 4096 -f ~/.ssh/mlops
+```
+
+Сурсите окружение.
+Настраиваете свой личный доступ. Эти настройки сохранятся в файле .dvc/config.local, который Git игнорирует.
+
+```bash
+# добавляете ключ в DVC
+dvc remote modify --local sfm-dvc keyfile ~/.ssh/mlops
+```
+
+### Основы работы
+
+В dvc храним данные для тренировки и модели:
+
+Для хранения данных:
+
+```
+data/
+- train/
+  - набор картинок 1
+  - набор картинок 2
+  - ...
+- test/
+  - набор картинок 1
+  - набор картинок 2
+  - ...
+- train_labels.csv (Список изображений в обучающих данных, включая эталонные данные)
+- train_thresholds.csv (Список пороговых значений для оценки)
+```
+
+Для хранения моделей:
+
+```
+checkpoints/
+- baseline/
+  - набор файлов
+- model_name/
+  - набор файлов
+```
+
+### Пуш в dvc
+
+1. Папки с моделями добавляем ПО ОТДЕЛЬНОСТИ и коммитим ТОЖЕ ОТДЕЛЬНО. То есть
+
+```
+dvc add checkpoints/baseline/
+git add checkpoints/baseline.dvc
+git commit -m "New weights for baseline. Changed lr"
+
+dvc add checkpoints/baseline/
+git add checkpoints/baseline.dvc
+git commit -m "New weights for baseline. Changed batch size"
+
+и т.д.
+```
+
+В противном случае(например, если добавить dvc add models) DVC видит всю папку как один артефакт и изменение весов для одного объекта повлечет за собой изменение вообще всей папки models, а это неудобно для версионирования
+
+После того как всё добавили, делаете
+
+```
+dvc push
+```
+
+Затем проверяете что все .dvc закоммичены
+
+И!! ОБЯЗАТЕЛЬНО
+
+```
+git push origin YOUR_BRANCH_NAME
+```
+
+И сливаете через пулл реквест с мейном, чтобы все могли пользоваться обновленными данными в DVC
+
+## Работа с MlFlow
+
+Все эксперименты, гиперпараметры, графики и метрики логируются на удалённый MLflow-сервер.
+Для авторизации используется единый стандарт конфигурации через файл `.env` в корне проекта.
+
+Файл `.env` хранится только локально на вашей машине.
+
+### Настройка доступа (единоразово)
+
+1. Создайте локальный файл `.env` из шаблона `.env.example`:
+
+- **Linux / macOS**:
+  ```bash
+  cp .env.example .env
+  ```
+- **Windows (PowerShell)**:
+  ```powershell
+  Copy-Item .env.example .env
+  ```
+- **Windows (CMD)**:
+  ```cmd
+  copy .env.example .env
+  ```
+
+2. Откройте созданный `.env` и укажите выданные вам логин и пароль:
+
+```env
+MLFLOW_TRACKING_URI=https://217.60.0.116.sslip.io
+MLFLOW_TRACKING_USERNAME=ваш_логин
+MLFLOW_TRACKING_PASSWORD=ваш_пароль
+```
+
+3. (Опционально) Проверьте подключение СО СВОИМ ИМЕНЕМ В ПРОЕКТЕ!!!!!!:
+
+```bash
+python -c "from dotenv import load_dotenv; import mlflow; load_dotenv(); mlflow.set_experiment('test_sfm-rotations_YOURNAME'); print('MLflow OK')"
+```
+
+При запуске обучения скрипт автоматически считает `.env`, авторизуется и запишет:
+
+- Использованные гиперпараметры;
+- Версию кода (`git_commit_id`);
+- Метрики и функции потерь по эпохам (интерактивные графики в веб-интерфейсе);
+- Графики и лог обучения (в директорию `plots/` репозитория и в артефакты MLflow).
+
 ## Обучение
 
-#### Запуск
+Конфигурация обучения управляется с помощью **[Hydra](https://hydra.cc/)**.
+Все параметры по умолчанию заданы в файле [configs/baseline_train.yaml](configs/baseline_train.yaml).
 
+#### Запуск обучения
+
+```bash
+# 1. Запуск с параметрами по умолчанию из configs/baseline_train.yaml:
+python -m sfm_rotations.train
+
+# 2. Запуск БЕЗ логирования в MLflow (для тестов и отладки пайплайна):
+python -m sfm_rotations.train --no-logging
+
+# 3. Переопределение любых параметров через аргументы командной строки:
+python -m sfm_rotations.train epochs=5 lr=1e-4 batch_size=21
+
+# 4. Переопределение списков и путей:
+python -m sfm_rotations.train data_root=data checkpoints=checkpoints/exp1 "loss_weights=[0.5,0.25,0.25]"
+
+# 5. Просмотр полной справки и доступных параметров:
+python -m sfm_rotations.train --help
 ```
-python -m sfm_rotations.train --data-root image-matching-challenge-2025
+
+#### Параметры конфигурации ([configs/baseline_train.yaml](configs/baseline_train.yaml))
+
+| Параметр                 | По умолчанию            | Описание                                                                                                                         |
+| ------------------------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `data_root`              | `data`                  | Путь к папке с данными                                                                                                           |
+| `checkpoints`            | `checkpoints`           | Директория для сохранения весов и метрик. Сохраняйте в подпапку с соотвествующим названием модели. например checkpoints/baseline |
+| `backbone`               | `facebook/dinov2-base`  | Модель backbone из HuggingFace                                                                                                   |
+| `embedding_dim`          | `256`                   | Размерность выходного эмбеддинга сцены                                                                                           |
+| `freeze_backbone`        | `false`                 | Заморозить backbone (обучать только проекционные головы)                                                                         |
+| `epochs`                 | `10`                    | Количество эпох обучения                                                                                                         |
+| `lr`                     | `2e-5`                  | Learning rate (AdamW)                                                                                                            |
+| `loss_weights`           | `[0.4, 0.3, 0.3]`       | Веса contrastive / rotation / translation loss                                                                                   |
+| `val_fraction`           | `0.2`                   | Доля сцен, выделяемых на валидацию                                                                                               |
+| `num_workers`            | `0`                     | Количество воркеров DataLoader                                                                                                   |
+| `seed`                   | `42`                    | Seed для воспроизводимости                                                                                                       |
+| `batch_size`             | `21`                    | Размер батча на обучении                                                                                                         |
+| `clusters_per_batch`     | `6`                     | Число различных сцен в обучающем батче                                                                                           |
+| `outlier_fraction`       | `0.125`                 | Доля выбросов (outliers) в обучающем батче                                                                                       |
+| `val_batch_size`         | `16`                    | Размер батча на валидации (для `val/loss`)                                                                                       |
+| `val_clusters_per_batch` | `3`                     | Число сцен в валидационном батче                                                                                                 |
+| `val_outlier_fraction`   | `0.25`                  | Доля выбросов в валидационном батче                                                                                              |
+| `eval_batch_size`        | `32`                    | Размер батча при расчёте метрик                                                                                                  |
+| `cluster_distance`       | `0.3`                   | Порог косинусного расстояния при кластеризации эмбеддингов                                                                       |
+| `min_cluster_size`       | `3`                     | Кластеры меньше этого размера считаются выбросами                                                                                |
+| `dvc_pull`               | `true`                  | Автоматически скачивать данные через DVC Python API                                                                              |
+| `logging`                | `true`                  | Логирование в MLflow (`false` или флаг `--no-logging`)                                                                           |
+| `mlflow_tracking_uri`    | `http://127.0.0.1:8080` | Адрес MLflow сервера (подтягивается из `.env`)                                                                                   |
+| `mlflow_experiment_name` | `sfm-rotations`         | Название эксперимента в MLflow                                                                                                   |
+
+#### Состав батча
+
+Формируется через `ContrastiveBatchSampler`:
+
+- `round(batch_size * outlier_fraction)` изображений — выбросы (outliers).
+- Оставшиеся изображения делятся поровну между `clusters_per_batch` сценами: `(batch_size - round(batch_size * outlier_fraction)) / clusters_per_batch`.
+
+По умолчанию:
+
+- **train**: `round(21 * 0.125) = 3` выброса + 6 сцен × 3 картинки = 21 изображение.
+- **val**: `round(16 * 0.25) = 4` выброса + 3 сцены × 4 картинки = 16 изображений.
+
+Изображений на одну сцену должно быть не менее 2, иначе для contrastive loss не образуется положительных пар.
+
+#### Валидация и артефакты
+
+- Валидация делится **по сценам**: сцены из val модель на обучении не видит, а выбросы делятся случайно.
+- После каждой эпохи в директорию `checkpoints/` сохраняются:
+  - `last.pt` — последний чекпоинт (веса, номер эпохи и метрики);
+  - `best.pt` — лучший чекпоинт по метрике `imc/score`;
+  - `metrics_epochNNN.json` — подробные метрики за эпоху.
+- По окончании обучения в папку `plots/` и в MLflow сохраняются:
+  - `plots/loss.png` — графики функций потерь (train и validation loss);
+  - `plots/imc_score.png` — динамика метрики соревнования IMC Score;
+  - `plots/rot_maa.png` — метрика точности вращения (Rotation mAA);
+  - `plots/training_summary.json` — история обучения.
+
+## Инференс (Infer)
+
+Для запуска предсказаний на новых тестовых данных используется скрипт `sfm_rotations.infer`, который также управляется через **Hydra** ([configs/baseline_infer.yaml](configs/baseline_infer.yaml)).
+
+При запуске автоматически подтягиваются тестовые данные через **DVC Python API** (файл `data/test.dvc`).
+
+#### Запуск инференса:
+
+```bash
+# 1. Запуск с параметрами по умолчанию (из configs/baseline_infer.yaml):
+python -m sfm_rotations.infer
+
+# 2. Указание своего чекпоинта и пути сохранения:
+python -m sfm_rotations.infer checkpoint=checkpoints/baseline/best.pt output_path=predictions.json
+
+# 3. Запуск на произвольной папке с изображениями:
+python -m sfm_rotations.infer test_dir=data/test dvc_pull=false
 ```
 
-Основные аргументы (полный список: `python -m sfm_rotations.train --help`):
+Результаты инференса сохраняются в json-файл (`output_path`) и содержат:
 
-| Аргумент                   | По умолчанию                    | Что делает                                                 |
-| -------------------------- | ------------------------------- | ---------------------------------------------------------- |
-| `--data-root`              | `image-matching-challenge-2025` | Папка с данными                                            |
-| `--checkpoints`            | `checkpoints`                   | Куда сохранять чекпоинты и метрики                         |
-| `--backbone`               | `facebook/dinov2-base`          | Backbone с HuggingFace                                     |
-| `--freeze-backbone`        | выкл.                           | Учить только головы                                        |
-| `--epochs`                 | `10`                            | Число эпох                                                 |
-| `--lr`                     | `2e-5`                          | Learning rate (AdamW)                                      |
-| `--loss-weights`           | `0.4 0.3 0.3`                   | Веса contrastive / rotation / translation loss             |
-| `--val-fraction`           | `0.2`                           | Доля сцен в валидации                                      |
-| `--batch-size`             | `32`                            | Размер батча на обучении                                   |
-| `--clusters-per-batch`     | `7`                             | Сколько разных сцен в батче на обучении                    |
-| `--outlier-fraction`       | `0.125`                         | Доля outliers в батче на обучении                          |
-| `--val-batch-size`         | `16`                            | Размер батча на валидации (для `val/loss`)                 |
-| `--val-clusters-per-batch` | `3`                             | Сколько разных сцен в батче на валидации                   |
-| `--val-outlier-fraction`   | `0.25`                          | Доля outliers в батче на валидации                         |
-| `--eval-batch-size`        | `32`                            | Размер батча при подсчёте метрик (на обучение не влияет)   |
-| `--cluster-distance`       | `0.3`                           | Порог косинусного расстояния при кластеризации эмбеддингов |
-| `--min-cluster-size`       | `3`                             | Кластеры меньше этого размера считаются outliers           |
-
-Состав батча: `round(batch_size * outlier_fraction)` outliers, остальное поровну делится между `clusters_per_batch` сценами. Поэтому `batch_size - round(batch_size * outlier_fraction)` должно делиться на `clusters_per_batch`, иначе обучение упадёт на старте. По умолчанию:
-
-- train: 4 outliers + 7 сцен × 4 картинки = 32;
-- val: 4 outliers + 3 сцены × 4 картинки = 16.
-
-Картинок на одну сцену должно быть хотя бы 2, иначе у contrastive loss не будет положительных пар. Лучше 4 и больше.
-
-Валидация делится **по сценам**: сцены из val модель на обучении не видит, а outliers делятся между train и val случайно.
-
-После каждой эпохи в `checkpoints/` сохраняются:
-
-- `last.pt` — последний чекпоинт (веса, номер эпохи и метрики);
-- `best.pt` — чекпоинт с лучшим `imc/score`;
-- `metrics_epochNNN.json` — все метрики эпохи, включая разбивку по датасетам.
+- Путь к изображению (`image_path`);
+- Предсказанный кластер сцены (`scene_cluster`);
+- Матрицу поворота камеры (`rotation_matrix` 3x3);
+- Вектор перемещения (`translation_vector` 3D).
 
 ## Метрики
 

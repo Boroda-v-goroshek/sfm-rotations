@@ -1,5 +1,4 @@
 [core]
-    autostage = true
-    remote = remote-server
-['remote "remote-server"']
-    url = url
+    remote = sfm-dvc
+['remote "sfm-dvc"']
+    url = ssh://aboba@217.60.0.116//home/aboba/dvc-storage
