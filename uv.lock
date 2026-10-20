@@ -2392,6 +2392,7 @@ source = { editable = "." }
 dependencies = [
     { name = "dvc", extra = ["ssh"] },
     { name = "hydra-core" },
+    { name = "matplotlib" },
     { name = "mlflow" },
     { name = "numpy" },
     { name = "pandas" },
@@ -2412,6 +2413,7 @@ dev = [
 requires-dist = [
     { name = "dvc", extras = ["ssh"] },
     { name = "hydra-core" },
+    { name = "matplotlib" },
     { name = "mlflow", specifier = ">=3.1" },
     { name = "numpy" },
     { name = "pandas" },

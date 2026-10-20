@@ -1,12 +1,19 @@
 import json
 import random
+import subprocess
 from pathlib import Path
 
 import hydra
+import matplotlib.pyplot as plt
+import mlflow
 import numpy as np
 import pandas as pd
 import torch
+from dotenv import load_dotenv
 from omegaconf import DictConfig
+from omegaconf import OmegaConf
+
+load_dotenv()
 from torch.utils.data import DataLoader
 from torch.utils.data import Subset
 from tqdm import tqdm
@@ -158,106 +165,179 @@ def collect_outputs(model: SfMModel, loader: DataLoader, device: str, meta: pd.D
 @hydra.main(version_base=None, config_path="../../configs", config_name="baseline")
 def main(cfg: DictConfig) -> None:
     """Train the model, compute validation metrics and save checkpoints every epoch."""
-    seed_everything(cfg.seed)
+    mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
+    mlflow.set_experiment(cfg.mlflow_experiment_name)
 
-    data_root = Path(cfg.data_root)
-    checkpoints = Path(cfg.checkpoints)
+    with mlflow.start_run():
+        try:
+            commit_id = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
+        except Exception:
+            commit_id = "unknown"
+        mlflow.set_tag("git_commit_id", commit_id)
+        mlflow.set_tag("mlflow.source.git.commit", commit_id)
+        mlflow.log_param("git_commit_id", commit_id)
+        mlflow.log_params(OmegaConf.to_container(cfg, resolve=True))
 
-    df = load_labels(data_root)
-    cluster_ids = df["scene_label"].tolist()
-    train_indices, val_indices = train_val_split_by_cluster(cluster_ids, val_fraction=cfg.val_fraction, seed=cfg.seed)
+        seed_everything(cfg.seed)
 
-    train_transform, val_transform = build_transforms()
-    # Sampler отдаёт глобальные индексы строк df, поэтому оба датасета строятся по полному df.
-    train_dataset = SceneDataset(df, transform=train_transform)
-    val_dataset = SceneDataset(df, transform=val_transform)
+        data_root = Path(cfg.data_root)
+        checkpoints = Path(cfg.checkpoints)
 
-    train_sampler = ContrastiveBatchSampler(
-        train_indices,
-        cluster_ids,
-        batch_size=cfg.batch_size,
-        clusters_per_batch=cfg.clusters_per_batch,
-        outlier_fraction=cfg.outlier_fraction,
-        seed=cfg.seed,
-    )
-    val_sampler = ContrastiveBatchSampler(
-        val_indices,
-        cluster_ids,
-        batch_size=cfg.val_batch_size,
-        clusters_per_batch=cfg.val_clusters_per_batch,
-        outlier_fraction=cfg.val_outlier_fraction,
-        seed=cfg.seed,
-    )
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    pin_memory = device == "cuda"
-    train_loader = DataLoader(
-        train_dataset,
-        batch_sampler=train_sampler,
-        num_workers=cfg.num_workers,
-        pin_memory=pin_memory,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_sampler=val_sampler,
-        num_workers=cfg.num_workers,
-        pin_memory=pin_memory,
-    )
-
-    # Последовательный проход по всей валидации для метрик (sampler пропускает часть изображений).
-    eval_loader = DataLoader(
-        Subset(val_dataset, val_indices),
-        batch_size=cfg.eval_batch_size,
-        shuffle=False,
-        num_workers=cfg.num_workers,
-        pin_memory=pin_memory,
-    )
-    eval_meta = df.iloc[val_indices]
-    thresholds = load_thresholds(data_root)
-
-    print(f"device: {device}")
-    model = SfMModel(
-        backbone_name=cfg.backbone,
-        embedding_dim=cfg.embedding_dim,
-        freeze_backbone=cfg.freeze_backbone,
-    ).to(device)
-    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=cfg.lr)
-
-    checkpoints.mkdir(parents=True, exist_ok=True)
-    loss_weights = tuple(cfg.loss_weights)
-    best_score = float("-inf")
-
-    for epoch in range(cfg.epochs):
-        train_sampler.set_epoch(epoch)
-        desc = f"Epoch {epoch + 1}/{cfg.epochs}"
-
-        train_loss = run_epoch(model, train_loader, device, loss_weights, f"{desc} train", optimizer)
-        print(f"Epoch {epoch + 1}: train loss={train_loss:.5f}")
-
-        val_loss = run_epoch(model, val_loader, device, loss_weights, f"{desc} val")
-        print(f"Epoch {epoch + 1}: validation loss={val_loss:.5f}")
-
-        outputs = collect_outputs(model, eval_loader, device, eval_meta)
-        metrics = compute_all_metrics(
-            outputs,
-            thresholds,
-            distance_threshold=cfg.cluster_distance,
-            min_cluster_size=cfg.min_cluster_size,
+        df = load_labels(data_root)
+        cluster_ids = df["scene_label"].tolist()
+        train_indices, val_indices = train_val_split_by_cluster(
+            cluster_ids, val_fraction=cfg.val_fraction, seed=cfg.seed
         )
-        metrics.update({"train/loss": train_loss, "val/loss": val_loss, "epoch": epoch + 1})
-        print(f"Epoch {epoch + 1} metrics:\n{format_metrics(metrics)}")
 
-        with open(checkpoints / f"metrics_epoch{epoch + 1:03d}.json", "w") as f:
-            json.dump(metrics, f, indent=2, ensure_ascii=False)
+        train_transform, val_transform = build_transforms()
+        # Sampler отдаёт глобальные индексы строк df, поэтому оба датасета строятся по полному df.
+        train_dataset = SceneDataset(df, transform=train_transform)
+        val_dataset = SceneDataset(df, transform=val_transform)
 
-        checkpoint = {"model": model.state_dict(), "epoch": epoch + 1, "metrics": metrics}
-        torch.save(checkpoint, checkpoints / "last.pt")
+        train_sampler = ContrastiveBatchSampler(
+            train_indices,
+            cluster_ids,
+            batch_size=cfg.batch_size,
+            clusters_per_batch=cfg.clusters_per_batch,
+            outlier_fraction=cfg.outlier_fraction,
+            seed=cfg.seed,
+        )
+        val_sampler = ContrastiveBatchSampler(
+            val_indices,
+            cluster_ids,
+            batch_size=cfg.val_batch_size,
+            clusters_per_batch=cfg.val_clusters_per_batch,
+            outlier_fraction=cfg.val_outlier_fraction,
+            seed=cfg.seed,
+        )
 
-        score = metrics.get("imc/score", float("-inf"))
-        if score > best_score:
-            best_score = score
-            torch.save(checkpoint, checkpoints / "best.pt")
-            print(f"New best imc/score={score:.4f}")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        pin_memory = device == "cuda"
+        train_loader = DataLoader(
+            train_dataset,
+            batch_sampler=train_sampler,
+            num_workers=cfg.num_workers,
+            pin_memory=pin_memory,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_sampler=val_sampler,
+            num_workers=cfg.num_workers,
+            pin_memory=pin_memory,
+        )
+
+        # Последовательный проход по всей валидации для метрик (sampler пропускает часть изображений).
+        eval_loader = DataLoader(
+            Subset(val_dataset, val_indices),
+            batch_size=cfg.eval_batch_size,
+            shuffle=False,
+            num_workers=cfg.num_workers,
+            pin_memory=pin_memory,
+        )
+        eval_meta = df.iloc[val_indices]
+        thresholds = load_thresholds(data_root)
+
+        print(f"device: {device}")
+        model = SfMModel(
+            backbone_name=cfg.backbone,
+            embedding_dim=cfg.embedding_dim,
+            freeze_backbone=cfg.freeze_backbone,
+        ).to(device)
+        optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=cfg.lr)
+
+        checkpoints.mkdir(parents=True, exist_ok=True)
+        loss_weights = tuple(cfg.loss_weights)
+        best_score = float("-inf")
+
+        history_train_loss = []
+        history_val_loss = []
+        history_imc_score = []
+        history_rot_maa = []
+
+        for epoch in range(cfg.epochs):
+            train_sampler.set_epoch(epoch)
+            desc = f"Epoch {epoch + 1}/{cfg.epochs}"
+
+            train_loss = run_epoch(model, train_loader, device, loss_weights, f"{desc} train", optimizer)
+            print(f"Epoch {epoch + 1}: train loss={train_loss:.5f}")
+
+            val_loss = run_epoch(model, val_loader, device, loss_weights, f"{desc} val")
+            print(f"Epoch {epoch + 1}: validation loss={val_loss:.5f}")
+
+            outputs = collect_outputs(model, eval_loader, device, eval_meta)
+            metrics = compute_all_metrics(
+                outputs,
+                thresholds,
+                distance_threshold=cfg.cluster_distance,
+                min_cluster_size=cfg.min_cluster_size,
+            )
+            metrics.update({"train/loss": train_loss, "val/loss": val_loss, "epoch": epoch + 1})
+            print(f"Epoch {epoch + 1} metrics:\n{format_metrics(metrics)}")
+
+            with open(checkpoints / f"metrics_epoch{epoch + 1:03d}.json", "w") as f:
+                json.dump(metrics, f, indent=2, ensure_ascii=False)
+
+            checkpoint = {"model": model.state_dict(), "epoch": epoch + 1, "metrics": metrics}
+            torch.save(checkpoint, checkpoints / "last.pt")
+
+            score = metrics.get("imc/score", float("-inf"))
+            if score > best_score:
+                best_score = score
+                torch.save(checkpoint, checkpoints / "best.pt")
+                print(f"New best imc/score={score:.4f}")
+
+            history_train_loss.append(train_loss)
+            history_val_loss.append(val_loss)
+            history_imc_score.append(score)
+            history_rot_maa.append(metrics.get("pose/rel_rot_mAA", float("nan")))
+
+            for k, v in metrics.items():
+                if isinstance(v, (int, float)):
+                    mlflow.log_metric(k, v, step=epoch + 1)
+
+        plots_dir = Path("plots")
+        plots_dir.mkdir(parents=True, exist_ok=True)
+
+        epochs_range = list(range(1, cfg.epochs + 1))
+
+        plt.figure()
+        plt.plot(epochs_range, history_train_loss, label="Train Loss")
+        plt.plot(epochs_range, history_val_loss, label="Val Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.legend()
+        plt.title("Train and Validation Losses")
+        plt.savefig(plots_dir / "loss.png")
+        plt.close()
+
+        plt.figure()
+        plt.plot(epochs_range, history_imc_score, label="IMC Score", color="green")
+        plt.xlabel("Epoch")
+        plt.ylabel("Score")
+        plt.legend()
+        plt.title("IMC Competition Score")
+        plt.savefig(plots_dir / "imc_score.png")
+        plt.close()
+
+        plt.figure()
+        plt.plot(epochs_range, history_rot_maa, label="Rotation mAA", color="orange")
+        plt.xlabel("Epoch")
+        plt.ylabel("mAA")
+        plt.legend()
+        plt.title("Pose Relative Rotation mAA")
+        plt.savefig(plots_dir / "rot_maa.png")
+        plt.close()
+
+        history_summary = {
+            "train_loss": history_train_loss,
+            "val_loss": history_val_loss,
+            "imc_score": history_imc_score,
+            "rot_maa": history_rot_maa,
+        }
+        with open(plots_dir / "training_summary.json", "w") as f:
+            json.dump(history_summary, f, indent=2)
+
+        mlflow.log_artifacts(str(plots_dir), artifact_path="plots")
 
 
 if __name__ == "__main__":
