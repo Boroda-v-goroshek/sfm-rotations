@@ -1,0 +1,11 @@
+data_root: "data"
+test_dir: "data/test"
+checkpoint: "checkpoints/best.pt"
+backbone: "facebook/dinov2-base"
+embedding_dim: 256
+output_path: "predictions.json"
+batch_size: 32
+num_workers: 0
+cluster_distance: 0.3
+min_cluster_size: 3
+dvc_pull: true

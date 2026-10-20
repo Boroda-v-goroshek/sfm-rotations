@@ -1,6 +1,7 @@
 import json
 import random
 import subprocess
+from contextlib import nullcontext
 from pathlib import Path
 
 import hydra
@@ -12,8 +13,6 @@ import torch
 from dotenv import load_dotenv
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
-
-load_dotenv()
 from torch.utils.data import DataLoader
 from torch.utils.data import Subset
 from tqdm import tqdm
@@ -23,6 +22,7 @@ from sfm_rotations.data import SceneDataset
 from sfm_rotations.data import build_transforms
 from sfm_rotations.data import load_labels
 from sfm_rotations.data import train_val_split_by_cluster
+from sfm_rotations.dvc_utils import pull_dvc_data
 from sfm_rotations.losses import compute_losses
 from sfm_rotations.losses import rotation_6d_to_matrix
 from sfm_rotations.metrics import EvalOutputs
@@ -30,6 +30,8 @@ from sfm_rotations.metrics import compute_all_metrics
 from sfm_rotations.metrics import format_metrics
 from sfm_rotations.metrics import load_thresholds
 from sfm_rotations.model import SfMModel
+
+load_dotenv()
 
 
 def seed_everything(seed: int) -> None:
@@ -47,9 +49,6 @@ def seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
-
-
 
 
 def run_epoch(
@@ -165,28 +164,52 @@ def collect_outputs(model: SfMModel, loader: DataLoader, device: str, meta: pd.D
 @hydra.main(version_base=None, config_path="../../configs", config_name="baseline")
 def main(cfg: DictConfig) -> None:
     """Train the model, compute validation metrics and save checkpoints every epoch."""
-    mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
-    mlflow.set_experiment(cfg.mlflow_experiment_name)
+    enable_mlflow = cfg.get("logging", True)
+    if enable_mlflow:
+        mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
+        mlflow.set_experiment(cfg.mlflow_experiment_name)
+    else:
+        print("MLflow logging disabled (--no-logging / logging=false).")
 
-    with mlflow.start_run():
-        try:
-            commit_id = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
-        except Exception:
-            commit_id = "unknown"
-        mlflow.set_tag("git_commit_id", commit_id)
-        mlflow.set_tag("mlflow.source.git.commit", commit_id)
-        mlflow.log_param("git_commit_id", commit_id)
-        mlflow.log_params(OmegaConf.to_container(cfg, resolve=True))
+    run_context = mlflow.start_run() if enable_mlflow else nullcontext()
+    with run_context:
+        if enable_mlflow:
+            try:
+                commit_id = (
+                    subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()  # noqa: S603, S607
+                )
+            except Exception:
+                commit_id = "unknown"
+            mlflow.set_tag("git_commit_id", commit_id)
+            mlflow.set_tag("mlflow.source.git.commit", commit_id)
+            mlflow.log_param("git_commit_id", commit_id)
+            mlflow.log_params(OmegaConf.to_container(cfg, resolve=True))
 
         seed_everything(cfg.seed)
 
         data_root = Path(cfg.data_root)
         checkpoints = Path(cfg.checkpoints)
 
+        if cfg.get("dvc_pull", True):
+            pull_dvc_data(
+                targets=[
+                    str(data_root / "train.dvc"),
+                    str(data_root / "train_labels.csv.dvc"),
+                    str(data_root / "train_thresholds.csv.dvc"),
+                ],
+                required_paths=[
+                    data_root / "train_labels.csv",
+                    data_root / "train_thresholds.csv",
+                    data_root / "train",
+                ],
+            )
+
         df = load_labels(data_root)
         cluster_ids = df["scene_label"].tolist()
         train_indices, val_indices = train_val_split_by_cluster(
-            cluster_ids, val_fraction=cfg.val_fraction, seed=cfg.seed
+            cluster_ids,
+            val_fraction=cfg.val_fraction,
+            seed=cfg.seed,
         )
 
         train_transform, val_transform = build_transforms()
@@ -291,9 +314,10 @@ def main(cfg: DictConfig) -> None:
             history_imc_score.append(score)
             history_rot_maa.append(metrics.get("pose/rel_rot_mAA", float("nan")))
 
-            for k, v in metrics.items():
-                if isinstance(v, (int, float)):
-                    mlflow.log_metric(k, v, step=epoch + 1)
+            if enable_mlflow:
+                for k, v in metrics.items():
+                    if isinstance(v, int | float):
+                        mlflow.log_metric(k, v, step=epoch + 1)
 
         plots_dir = Path("plots")
         plots_dir.mkdir(parents=True, exist_ok=True)
@@ -337,8 +361,15 @@ def main(cfg: DictConfig) -> None:
         with open(plots_dir / "training_summary.json", "w") as f:
             json.dump(history_summary, f, indent=2)
 
-        mlflow.log_artifacts(str(plots_dir), artifact_path="plots")
+        if enable_mlflow:
+            mlflow.log_artifacts(str(plots_dir), artifact_path="plots")
 
 
 if __name__ == "__main__":
+    import sys
+
+    # Support convenience flags from CLI: --no-logging or --no-mlflow
+    sys.argv = [
+        arg.replace("--no-logging", "logging=false").replace("--no-mlflow", "logging=false") for arg in sys.argv
+    ]
     main()
