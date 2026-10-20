@@ -182,11 +182,12 @@ python -c "from dotenv import load_dotenv; import mlflow; load_dotenv(); mlflow.
 ## Обучение
 
 Конфигурация обучения управляется с помощью **[Hydra](https://hydra.cc/)**.
+Все параметры по умолчанию заданы в файле [configs/baseline_train.yaml](configs/baseline_train.yaml).
 
 #### Запуск обучения
 
 ```bash
-# 1. Запуск с параметрами по умолчанию из configs/baseline.yaml:
+# 1. Запуск с параметрами по умолчанию из configs/baseline_train.yaml:
 python -m sfm_rotations.train
 
 # 2. Запуск БЕЗ логирования в MLflow (для тестов и отладки пайплайна):
@@ -202,7 +203,7 @@ python -m sfm_rotations.train data_root=data checkpoints=checkpoints/exp1 "loss_
 python -m sfm_rotations.train --help
 ```
 
-#### Параметры конфигурации ([configs/baseline.yaml](configs/baseline.yaml))
+#### Параметры конфигурации ([configs/baseline_train.yaml](configs/baseline_train.yaml))
 
 | Параметр                 | По умолчанию            | Описание                                                                                                                         |
 | ------------------------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -260,14 +261,14 @@ python -m sfm_rotations.train --help
 
 ## Инференс (Infer)
 
-Для запуска предсказаний на новых тестовых данных используется скрипт `sfm_rotations.infer`, который также управляется через **Hydra** ([configs/infer.yaml](configs/infer.yaml)).
+Для запуска предсказаний на новых тестовых данных используется скрипт `sfm_rotations.infer`, который также управляется через **Hydra** ([configs/baseline_infer.yaml](configs/baseline_infer.yaml)).
 
 При запуске автоматически подтягиваются тестовые данные через **DVC Python API** (файл `data/test.dvc`).
 
 #### Запуск инференса:
 
 ```bash
-# 1. Запуск с параметрами по умолчанию (из configs/infer.yaml):
+# 1. Запуск с параметрами по умолчанию (из configs/baseline_infer.yaml):
 python -m sfm_rotations.infer
 
 # 2. Указание своего чекпоинта и пути сохранения:

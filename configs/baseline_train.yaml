@@ -3,7 +3,7 @@ checkpoints: checkpoints/baseline
 backbone: facebook/dinov2-base
 embedding_dim: 256
 freeze_backbone: false
-epochs: 10
+epochs: 2
 lr: 2e-05
 loss_weights: [0.4, 0.3, 0.3]
 val_fraction: 0.2

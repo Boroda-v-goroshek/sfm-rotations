@@ -37,7 +37,7 @@ class InferenceDataset(Dataset):
         return image, str(path)
 
 
-@hydra.main(version_base=None, config_path="../../configs", config_name="infer")
+@hydra.main(version_base=None, config_path="../../configs", config_name="baseline_infer")
 def main(cfg: DictConfig) -> None:
     """Run model inference on test images and save predictions."""
     data_root = Path(cfg.data_root)

@@ -1,5 +1,6 @@
 import json
 import random
+import re
 import subprocess
 from contextlib import nullcontext
 from pathlib import Path
@@ -161,7 +162,7 @@ def collect_outputs(model: SfMModel, loader: DataLoader, device: str, meta: pd.D
     )
 
 
-@hydra.main(version_base=None, config_path="../../configs", config_name="baseline")
+@hydra.main(version_base=None, config_path="../../configs", config_name="baseline_train")
 def main(cfg: DictConfig) -> None:
     """Train the model, compute validation metrics and save checkpoints every epoch."""
     enable_mlflow = cfg.get("logging", True)
@@ -317,7 +318,8 @@ def main(cfg: DictConfig) -> None:
             if enable_mlflow:
                 for k, v in metrics.items():
                     if isinstance(v, int | float):
-                        mlflow.log_metric(k, v, step=epoch + 1)
+                        clean_key = re.sub(r"[^a-zA-Z0-9_\-./ :]", "_", k.replace("@", "_at_"))
+                        mlflow.log_metric(clean_key, v, step=epoch + 1)
 
         plots_dir = Path("plots")
         plots_dir.mkdir(parents=True, exist_ok=True)
