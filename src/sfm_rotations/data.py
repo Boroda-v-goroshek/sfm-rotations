@@ -12,8 +12,8 @@ from torch.utils.data import Sampler
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
-OUTLIER_SCENE = "outliers"
-OUTLIER_LABEL = -1
+from sfm_rotations.contracts import OUTLIER_LABEL
+from sfm_rotations.contracts import OUTLIER_SCENE
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]

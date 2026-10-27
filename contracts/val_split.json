@@ -1,0 +1,130 @@
+{
+  "labels_md5": "65d4ed3b1e80b4db596acadd29e09f29",
+  "outliers": [
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_dsc_4115_thumb.png"
+    },
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_dsc_4122_thumb.png"
+    },
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_dsc_4125_thumb.png"
+    },
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_dsc_4127_thumb.png"
+    },
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_dsc_4129_thumb.png"
+    },
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_img_3249.png"
+    },
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_img_3254.png"
+    },
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_img_3255.png"
+    },
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_img_8372.png"
+    },
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_img_8600.png"
+    },
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_img_8632.png"
+    },
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_img_8641.png"
+    },
+    {
+      "dataset": "imc2023_heritage",
+      "image": "outliers_img_9076.png"
+    },
+    {
+      "dataset": "imc2024_dioscuri_baalshamin",
+      "image": "outliers_29622692_8024707719.png"
+    },
+    {
+      "dataset": "imc2024_dioscuri_baalshamin",
+      "image": "outliers_36840190_2262283891.png"
+    },
+    {
+      "dataset": "imc2024_lizard_pond",
+      "image": "outliers_img_20230617_181545.png"
+    },
+    {
+      "dataset": "imc2024_lizard_pond",
+      "image": "outliers_img_20230617_181719.png"
+    },
+    {
+      "dataset": "imc2024_lizard_pond",
+      "image": "outliers_img_20230617_181748.png"
+    },
+    {
+      "dataset": "imc2024_lizard_pond",
+      "image": "outliers_img_20230617_181852.png"
+    },
+    {
+      "dataset": "imc2024_lizard_pond",
+      "image": "outliers_img_20230617_181854.png"
+    },
+    {
+      "dataset": "imc2024_lizard_pond",
+      "image": "outliers_img_20230617_181910.png"
+    },
+    {
+      "dataset": "imc2024_lizard_pond",
+      "image": "outliers_img_20230617_181912.png"
+    },
+    {
+      "dataset": "imc2024_lizard_pond",
+      "image": "outliers_img_20230617_181914.png"
+    },
+    {
+      "dataset": "imc2024_lizard_pond",
+      "image": "outliers_img_20230617_212059.png"
+    }
+  ],
+  "protocol_version": 1,
+  "scenes": [
+    {
+      "dataset": "imc2023_haiper",
+      "scene": "chairs"
+    },
+    {
+      "dataset": "imc2024_lizard_pond",
+      "scene": "lizard"
+    },
+    {
+      "dataset": "pt_piazzasanmarco_grandplace",
+      "scene": "piazza_san_marco"
+    },
+    {
+      "dataset": "pt_sacrecoeur_trevi_tajmahal",
+      "scene": "taj_mahal"
+    },
+    {
+      "dataset": "pt_sacrecoeur_trevi_tajmahal",
+      "scene": "trevi_fountain"
+    },
+    {
+      "dataset": "stairs",
+      "scene": "stairs_split_2"
+    }
+  ],
+  "seed": 42,
+  "val_fraction": 0.2
+}

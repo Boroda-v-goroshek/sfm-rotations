@@ -29,6 +29,7 @@ dependencies = [
 [dependency-groups]
 dev = [
   "pre-commit>=4.0.1",
+  "pytest>=9.1.1",
 ]
 
 [tool.ruff]
@@ -91,6 +92,11 @@ ignore = [
 
 [tool.ruff.lint.isort]
 force-single-line = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Известные расхождения с контрактами помечены xfail: исправили — тест обязан снять маркер.
+xfail_strict = true
 
 [tool.yamlfix]
 line_length = 120
