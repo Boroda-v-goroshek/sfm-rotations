@@ -1,0 +1,19 @@
+# Протокол оценки. Любое изменение этого файла — новая версия протокола (см. PROTOCOL.md).
+# Каждое поле сверяется тестами в tests/contracts/test_protocol.py.
+
+version: 1
+
+# Путь внутри data_root -> md5 его DVC-выхода (data/<путь>.dvc).
+data:
+  train: 11d2518b261811cc9330913e36cd75ab.dir
+  train_labels.csv: 65d4ed3b1e80b4db596acadd29e09f29
+  train_thresholds.csv: 543f9a7c118d51027be86602f0ac1c49
+
+split:
+  path: contracts/val_split.json
+  seed: 42
+  val_fraction: 0.2
+
+metrics:
+  primary: imc/score
+  rotation_thresholds_deg: [5.0, 10.0, 15.0, 30.0]

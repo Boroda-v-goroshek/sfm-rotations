@@ -1,0 +1,26 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    env:
+      # Контрактные тесты строят модель на крошечном DINOv2 и ничего не скачивают с HuggingFace.
+      HF_HUB_OFFLINE: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Тесты на настоящих данных пропускаются: в CI нет доступа к DVC.
+      - name: Run contract tests
+        run: uv run pytest tests/contracts -ra

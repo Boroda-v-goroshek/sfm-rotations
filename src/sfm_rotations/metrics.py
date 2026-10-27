@@ -510,11 +510,13 @@ def compute_all_metrics(
         idx = np.flatnonzero(outputs.datasets == dataset)
         predicted_clusters[idx] = cluster_embeddings(embeddings[idx], distance_threshold, min_cluster_size)
 
-    return {
+    metrics = {
         **pose_metrics(outputs),
         **embedding_metrics(outputs, predicted_clusters),
         **competition_metrics(outputs, predicted_clusters, thresholds),
     }
+    # Метрики попадают в чекпоинт: numpy-скаляры torch.load(weights_only=True) не загрузит.
+    return {key: float(value) for key, value in metrics.items()}
 
 
 def format_metrics(metrics: dict[str, float]) -> str:
