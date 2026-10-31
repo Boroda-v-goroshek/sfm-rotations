@@ -24,6 +24,8 @@ dependencies = [
   "mlflow>=3.1",
   "matplotlib",
   "python-dotenv",
+  "pycolmap>=4.2.1",
+  "lightglue",
 ]
 
 [dependency-groups]
@@ -118,3 +120,6 @@ reportArgumentType = "warning"
 [tool.setuptools.packages.find]
 where = ["src"]
 namespaces = false
+
+[tool.uv.sources]
+lightglue = { git = "https://github.com/cvg/LightGlue", rev = "5a650c444718caffc2669dc0094cde908f42dd73" }

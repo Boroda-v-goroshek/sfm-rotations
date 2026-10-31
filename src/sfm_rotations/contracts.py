@@ -33,7 +33,7 @@ import pandas as pd
 from omegaconf import OmegaConf
 
 # Должна совпадать с version в contracts/protocol.yaml (проверяется тестом).
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 PROTOCOL_PATH = Path("contracts/protocol.yaml")
 
 # Выбросы: scene == "outliers" в CSV, scene_label == -1 в коде, позы — NaN.

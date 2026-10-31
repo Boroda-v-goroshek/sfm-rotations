@@ -210,7 +210,8 @@ def pose_metrics(outputs: EvalOutputs) -> dict[str, float]:
 
     if not rel_errors:
         return {}
-    rel_err = np.concatenate(rel_errors)
+    # Пара с незарегистрированным изображением (поза NaN) — худшая возможная ошибка.
+    rel_err = np.nan_to_num(np.concatenate(rel_errors), nan=180.0)
     return {
         "pose/rel_rot_err_median_deg": float(np.median(rel_err)),
         "pose/rel_rot_mAA": float(np.mean([(rel_err < t).mean() for t in ROTATION_THRESHOLDS_DEG])),
@@ -381,7 +382,8 @@ def _scene_cluster_maa(
     mAA in [0, 1]
 
     """
-    common = np.flatnonzero(scene_mask & cluster_mask)
+    registered = np.isfinite(outputs.rotations_pred).all(axis=(1, 2)) & np.isfinite(outputs.translations_pred).all(1)
+    common = np.flatnonzero(scene_mask & cluster_mask & registered)
     if len(common) < 3:
         return 0.0
 

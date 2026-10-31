@@ -2,8 +2,8 @@
 Model -> evaluation boundary: whatever the baseline is, it ends up as Predictions.
 
 forward() and the 6D rotation representation are internals of the current
-baseline, not contracts; the tests below pin how train.py and infer.py
-currently turn them into Predictions.
+baseline, not contracts; the tests below pin how train.py
+currently turns them into Predictions.
 """
 
 import numpy as np
@@ -25,7 +25,7 @@ def images() -> torch.Tensor:
 
 @pytest.mark.usefixtures("tiny_backbone")
 def test_baseline_outputs_convert_to_predictions(images: torch.Tensor):
-    """Так выход модели превращают в позы collect_outputs (train.py) и infer.py."""
+    """Так выход модели превращает в позы collect_outputs (train.py)."""
     model = SfMModel(embedding_dim=16).eval()
     with torch.no_grad():
         embeddings, translations, rotations_6d = model(images)
@@ -40,7 +40,7 @@ def test_baseline_outputs_convert_to_predictions(images: torch.Tensor):
 
 
 @pytest.mark.xfail(
-    reason="#6: у модели нет predict() -> Predictions, 6D протекает в train.py и infer.py",
+    reason="#6: у модели нет predict() -> Predictions, 6D протекает в train.py",
     raises=AttributeError,
 )
 @pytest.mark.usefixtures("tiny_backbone")

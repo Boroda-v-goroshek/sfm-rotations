@@ -1,7 +1,7 @@
 # Протокол оценки. Любое изменение этого файла — новая версия протокола (см. PROTOCOL.md).
 # Каждое поле сверяется тестами в tests/contracts/test_protocol.py.
 
-version: 1
+version: 2
 
 # Путь внутри data_root -> md5 его DVC-выхода (data/<путь>.dvc).
 data:
