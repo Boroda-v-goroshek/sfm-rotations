@@ -52,6 +52,22 @@ def test_perfect_predictions_score_one(rng: np.random.Generator):
     assert metrics["pose/rel_rot_err_median_deg"] == pytest.approx(0.0, abs=1e-3)
 
 
+def test_unregistered_images_lower_maa_without_breaking_alignment(rng: np.random.Generator):
+    outputs, thresholds = make_eval_outputs(rng, DATASETS)
+    first_scene = _per_scene(outputs)[0]
+    rotations, translations = outputs.rotations_pred.copy(), outputs.translations_pred.copy()
+    rotations[first_scene[0]] = np.nan
+    translations[first_scene[0]] = np.nan
+    metrics = compute_all_metrics(
+        replace(outputs, rotations_pred=rotations, translations_pred=translations),
+        thresholds,
+    )
+
+    assert 0.0 < metrics["imc/mAA"] < 1.0
+    assert metrics["pose/rel_rot_mAA"] < 1.0
+    assert np.isfinite(metrics["pose/rel_rot_err_median_deg"])
+
+
 def test_merged_scenes_halve_clustering(rng: np.random.Generator):
     """Две сцены по 4 картинки в одном кластере: mAA = 1, clustering = 8 / 16, score = 2/3."""
     outputs, thresholds = make_eval_outputs(rng, {"ds_a": 2}, images_per_scene=4, outliers_per_dataset=0)

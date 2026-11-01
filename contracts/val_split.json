@@ -98,7 +98,7 @@
       "image": "outliers_img_20230617_212059.png"
     }
   ],
-  "protocol_version": 1,
+  "protocol_version": 2,
   "scenes": [
     {
       "dataset": "imc2023_haiper",

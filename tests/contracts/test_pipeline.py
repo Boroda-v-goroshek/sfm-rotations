@@ -18,7 +18,7 @@ import torch
 from sfm_rotations import infer
 from sfm_rotations import model
 from sfm_rotations import train
-from sfm_rotations.contracts import OUTLIER_LABEL
+from sfm_rotations.contracts import OUTLIER_SCENE
 from sfm_rotations.contracts import ContractError
 from sfm_rotations.contracts import Protocol
 from sfm_rotations.contracts import validate_checkpoint
@@ -31,6 +31,16 @@ from tests.contracts.synthetic import write_competition_data
 from tests.contracts.synthetic import write_image
 
 InferRunner = Callable[..., Path]
+
+
+class IdentityReconstructor:
+    """Stand-in for geometry.Reconstructor: no weights download, the COLMAP part has its own tests."""
+
+    def __init__(self, config: object, device: str):
+        pass
+
+    def reconstruct(self, paths: list[Path], embeddings: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return np.tile(np.eye(3), (len(paths), 1, 1)), np.zeros((len(paths), 3))
 
 
 @pytest.fixture(scope="module")
@@ -62,10 +72,10 @@ def run_infer(
     monkeypatch: pytest.MonkeyPatch,
     tiny_backbone: None,
 ) -> InferRunner:
-    # В tmp_path нет checkpoints/baseline/best.pt, так что fallback infer.py ничего не подхватит.
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(infer, "Reconstructor", IdentityReconstructor)
 
-    def run(test_dir: Path, output_name: str = "predictions.json", checkpoint: Path | None = None) -> Path:
+    def run(test_dir: Path, output_name: str = "submission.csv", checkpoint: Path | None = None) -> Path:
         output = test_dir.parent / output_name
         cfg = load_config(
             repo_root,
@@ -104,10 +114,6 @@ def test_infer_config_matches_train_config(repo_root: Path, key: str):
     assert infer_cfg[key] == train_cfg[key]
 
 
-@pytest.mark.xfail(
-    reason="#4: infer по умолчанию ищет checkpoints/best.pt, train пишет в checkpoints/baseline",
-    raises=AssertionError,
-)
 def test_infer_default_checkpoint_is_train_output(repo_root: Path):
     train_cfg, infer_cfg = load_config(repo_root, "baseline_train"), load_config(repo_root, "baseline_infer")
     assert Path(infer_cfg.checkpoint).parent == Path(train_cfg.checkpoints)
@@ -164,17 +170,12 @@ def test_infer_loads_train_checkpoint(
     output = run_infer(tmp_path / "test")
 
     assert "Loading checkpoint" in capsys.readouterr().out
-    with open(output) as f:
-        assert len(json.load(f)) == 4
+    assert len(pd.read_csv(output)) == 4
 
 
-@pytest.mark.xfail(
-    reason="#2: infer пишет JSON, а не submission.csv; у выбросов не nan",
-    raises=(ContractError, pd.errors.ParserError),
-)
 def test_infer_writes_submission(run_infer: InferRunner, tmp_path: Path, rng: np.random.Generator):
     _write_test_dir(tmp_path / "test", {"ds_x": [random_pixels(rng) for _ in range(3)], "ds_y": [random_pixels(rng)]})
-    output = run_infer(tmp_path / "test", output_name="submission.csv")
+    output = run_infer(tmp_path / "test")
 
     submission = pd.read_csv(output)
     validate_submission(submission)
@@ -186,7 +187,6 @@ def test_infer_writes_submission(run_infer: InferRunner, tmp_path: Path, rng: np
     ]
 
 
-@pytest.mark.xfail(reason="#1: infer кластеризует все изображения разом, а не внутри датасета", raises=AssertionError)
 def test_infer_clusters_within_dataset(
     run_infer: InferRunner,
     repo_root: Path,
@@ -204,14 +204,31 @@ def test_infer_clusters_within_dataset(
     _write_test_dir(tmp_path / "test", {"ds_x": [image, image], "ds_y": [image, image]})
     output = run_infer(tmp_path / "test")
 
-    # Формат вывода — текущий JSON; после исправления #2 тест читает submission.csv.
-    with open(output) as f:
-        clusters = [prediction["scene_cluster"] for prediction in json.load(f)]
-    assert clusters == [OUTLIER_LABEL] * 4
+    assert pd.read_csv(output)["scene"].tolist() == [OUTLIER_SCENE] * 4
 
 
-@pytest.mark.xfail(reason="#4: без чекпоинта infer молча работает на случайных весах", raises=pytest.fail.Exception)
 def test_infer_fails_without_checkpoint(run_infer: InferRunner, tmp_path: Path, rng: np.random.Generator):
     _write_test_dir(tmp_path / "test", {"ds_x": [random_pixels(rng)]})
     with pytest.raises(FileNotFoundError):
         run_infer(tmp_path / "test", checkpoint=tmp_path / "missing.pt")
+
+
+def test_cluster_keeps_unregistered_images_without_pose(
+    run_infer: InferRunner,
+    tmp_path: Path,
+    rng: np.random.Generator,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Картинка кластера, которую не зарегистрировал COLMAP, остаётся в кластере с позой nan."""
+
+    class Unregistered(IdentityReconstructor):
+        def reconstruct(self, paths: list[Path], embeddings: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            return np.full((len(paths), 3, 3), np.nan), np.full((len(paths), 3), np.nan)
+
+    monkeypatch.setattr(infer, "Reconstructor", Unregistered)
+    image = random_pixels(rng)
+    _write_test_dir(tmp_path / "test", {"ds_x": [image, image, image]})
+    submission = pd.read_csv(run_infer(tmp_path / "test"))
+
+    validate_submission(submission)
+    assert (submission["scene"] != OUTLIER_SCENE).all()
