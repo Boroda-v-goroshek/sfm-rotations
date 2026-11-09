@@ -1,170 +1,595 @@
 import torch
 import torch.nn.functional as F  # noqa: N812
+from scipy.optimize import linear_sum_assignment
 
 from sfm_rotations.data import OUTLIER_LABEL
-
-
-def rotation_6d_to_matrix(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """
-    Convert the 6D rotation representation to rotation matrices.
-
-    Uses Gram-Schmidt orthogonalization (Zhou et al., 2019).
-
-    Parameters
-    ----------
-    x:
-        6D rotations [B, 6].
-
-    eps:
-        Epsilon for vector normalization.
-
-    Returns
-    -------
-    rotation matrices [B, 3, 3]
-
-    """
-    a1, a2 = x[..., :3], x[..., 3:]
-    b1 = F.normalize(a1, dim=-1, eps=eps)
-    b2 = F.normalize(a2 - (b1 * a2).sum(dim=-1, keepdim=True) * b1, dim=-1, eps=eps)
-    b3 = torch.cross(b1, b2, dim=-1)
-    return torch.stack((b1, b2, b3), dim=-1)
-
-
-def rotation_geodesic_loss(r_pred: torch.Tensor, r_target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """
-    Mean squared geodesic angle between predicted and target rotations.
-
-    Parameters
-    ----------
-    r_pred:
-        Predicted rotations [B, 3, 3].
-
-    r_target:
-        Target rotations [B, 3, 3].
-
-    eps:
-        Margin for clamping cos(theta), keeps the acos gradient finite.
-
-    Returns
-    -------
-    scalar loss (radians squared)
-
-    """
-    relative = r_target.transpose(-1, -2) @ r_pred
-    trace = relative.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
-    # eps отступ: градиент acos в ±1 бесконечен.
-    cos_theta = ((trace - 1.0) / 2.0).clamp(-1.0 + eps, 1.0 - eps)
-    return torch.acos(cos_theta).square().mean()
+from sfm_rotations.model_utils import skew_symmetric
 
 
 def supervised_contrastive_loss(
-    embeddings: torch.Tensor,
-    labels: torch.Tensor,
-    temperature: float = 0.07,
-    outlier_label: int = OUTLIER_LABEL,
-) -> torch.Tensor:
+    embeddings,
+    scene_ids,
+    temperature=0.07
+):
     """
-    Supervised contrastive (SupCon) loss.
-
-    Positive pairs:
-        - images of the same scene in the batch.
-
-    Negative pairs:
-        - images of different scenes in the batch.
-
-    Outliers:
-        - do not form positive pairs with each other, serve only as negatives.
-
-    Parameters
-    ----------
-    embeddings:
-        Scene embeddings [B, D].
-
-    labels:
-        scene_label for every image [B].
-
-    temperature:
-        Softmax temperature.
-
-    outlier_label:
-        scene_label value that marks outliers.
-
-    Returns
-    -------
-    scalar loss
-
+    embeddings: [B, N, D]
+    scene_ids: [B, N], -1 = outlier
     """
-    device = embeddings.device
-    embeddings = F.normalize(embeddings, p=2, dim=1)
+    B, N, D = embeddings.shape
 
-    logits = embeddings @ embeddings.T / temperature
-    # Численная стабилизация
-    logits = logits - logits.max(dim=1, keepdim=True).values.detach()
+    z = F.normalize(embeddings, dim=-1)
+    z = z.reshape(B * N, D)
 
-    identity_mask = torch.eye(embeddings.shape[0], dtype=torch.bool, device=device)
-    positive_mask = (labels[:, None] == labels[None, :]) & ~identity_mask & (labels != outlier_label)[:, None]
+    labels = scene_ids.reshape(B * N)
 
-    exp_logits = torch.exp(logits).masked_fill(identity_mask, 0.0)
-    log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True).clamp_min(1e-12))
+    logits = (z @ z.T) / temperature
+
+    self_mask = torch.eye(
+        B * N, device=z.device, dtype=torch.bool
+    )
+
+    valid_anchor = labels >= 0
+
+    positive_mask = (
+        (labels[:, None] == labels[None, :])
+        & (labels[:, None] >= 0)
+        & (~self_mask)
+    )
+
+    denominator_mask = ~self_mask
+
+    logits = logits - logits.max(
+        dim=1, keepdim=True
+    ).values.detach()
+
+    exp_logits = torch.exp(logits) * denominator_mask
+
+    log_prob = logits - torch.log(
+        exp_logits.sum(dim=1, keepdim=True) + 1e-8
+    )
 
     positive_count = positive_mask.sum(dim=1)
-    valid = positive_count > 0
-    if not valid.any():
+
+    per_anchor = -(
+        log_prob * positive_mask
+    ).sum(dim=1) / positive_count.clamp_min(1)
+
+    valid_anchor = valid_anchor & (positive_count > 0)
+
+    if not valid_anchor.any():
         return embeddings.sum() * 0.0
 
-    mean_log_prob = (log_prob * positive_mask).sum(dim=1) / positive_count.clamp_min(1)
-    return -mean_log_prob[valid].mean()
+    return per_anchor[valid_anchor].mean()
 
 
-def compute_losses(
-    embeddings: torch.Tensor,
-    translations: torch.Tensor,
-    rotations_6d: torch.Tensor,
-    labels: dict[str, torch.Tensor],
-    loss_weights: tuple[float, float, float],
-) -> tuple[torch.Tensor, dict[str, float]]:
+def hungarian_assignment_loss(
+    assignment_logits,
+    scene_ids
+):
     """
-    Weighted sum of contrastive, rotation and translation losses.
+    assignment_logits: [B, N, K+1]
+    scene_ids: [B, N], -1 = outlier
 
-    Pose losses are computed only for non-outliers (outliers have NaN poses).
-
-    Parameters
-    ----------
-    embeddings:
-        Scene embeddings [B, D].
-
-    translations:
-        Predicted translations [B, 3].
-
-    rotations_6d:
-        Predicted 6D rotations [B, 6].
-
-    labels:
-        Batch labels from SceneDataset.
-
-    loss_weights:
-        Weights of contrastive, rotation and translation losses.
-
-    Returns
-    -------
-    total_loss, dict with float values of each loss component
-
+    Returns:
+      assignment_loss
+      activity_targets: [B, K]
     """
-    scene_labels = labels["scene_label"]
-    has_pose = scene_labels != OUTLIER_LABEL
+    B, N, K_plus_1 = assignment_logits.shape
+    K = K_plus_1 - 1
 
-    contrastive = supervised_contrastive_loss(embeddings, scene_labels)
-    if has_pose.any():
-        rotations = rotation_6d_to_matrix(rotations_6d[has_pose])
-        rotation = rotation_geodesic_loss(rotations, labels["rotation_matrix"][has_pose])
-        translation = F.smooth_l1_loss(translations[has_pose], labels["translation_vector"][has_pose])
-    else:
-        rotation = translation = embeddings.sum() * 0.0
+    log_probs = F.log_softmax(assignment_logits, dim=-1)
 
-    total = contrastive * loss_weights[0] + rotation * loss_weights[1] + translation * loss_weights[2]
-    parts = {
-        "contrastive": contrastive.item(),
-        "rotation": rotation.item(),
-        "translation": translation.item(),
+    activity_targets = torch.zeros(
+        B, K,
+        device=assignment_logits.device,
+        dtype=assignment_logits.dtype
+    )
+
+    total_loss = assignment_logits.sum() * 0.0
+    total_count = 0
+
+    for b in range(B):
+        labels = scene_ids[b]
+        unique_scenes = torch.unique(labels[labels >= 0])
+
+        num_gt_scenes = len(unique_scenes)
+
+        if num_gt_scenes > K:
+            raise ValueError(
+                f"В batch item {b} найдено {num_gt_scenes} сцен, "
+                f"но K_max={K}. Увеличьте число scene slots."
+            )
+
+        # GT scenes x predicted scene slots.
+        if num_gt_scenes > 0:
+            cost = torch.zeros(
+                num_gt_scenes, K,
+                device=assignment_logits.device
+            )
+
+            for g, scene_id in enumerate(unique_scenes):
+                mask = labels == scene_id
+
+                # Отрицательное среднее log likelihood.
+                cost[g] = -log_probs[
+                    b, mask, :K
+                ].mean(dim=0)
+
+            # Matching — дискретная операция без градиента.
+            rows, cols = linear_sum_assignment(
+                cost.detach().cpu().numpy()
+            )
+
+            gt_to_slot = {}
+
+            for row, col in zip(rows, cols):
+                scene_id = int(unique_scenes[row].item())
+                gt_to_slot[scene_id] = int(col)
+
+                activity_targets[b, col] = 1.0
+
+            # Assignment CE для inlier images.
+            for scene_id, slot_id in gt_to_slot.items():
+                mask = labels == scene_id
+
+                total_loss = total_loss + F.cross_entropy(
+                    assignment_logits[b, mask],
+                    torch.full(
+                        (int(mask.sum().item()),),
+                        slot_id,
+                        device=assignment_logits.device,
+                        dtype=torch.long
+                    ),
+                    reduction="sum"
+                )
+
+                total_count += int(mask.sum().item())
+
+        # Все outliers должны назначаться в Dustbin.
+        outlier_mask = labels < 0
+
+        if outlier_mask.any():
+            dustbin_target = torch.full(
+                (int(outlier_mask.sum().item()),),
+                K,
+                device=assignment_logits.device,
+                dtype=torch.long
+            )
+
+            total_loss = total_loss + F.cross_entropy(
+                assignment_logits[b, outlier_mask],
+                dustbin_target,
+                reduction="sum"
+            )
+
+            total_count += int(outlier_mask.sum().item())
+
+    loss = total_loss / max(total_count, 1)
+
+    return loss, activity_targets
+
+
+def slot_activity_loss(
+    activity_logits,
+    activity_targets,
+    pos_weight=None
+):
+    """
+    activity_logits: [B, K]
+    activity_targets: [B, K]
+    """
+    if pos_weight is not None:
+        pos_weight = torch.as_tensor(
+            pos_weight,
+            device=activity_logits.device,
+            dtype=activity_logits.dtype
+        )
+
+    return F.binary_cross_entropy_with_logits(
+        activity_logits,
+        activity_targets,
+        pos_weight=pos_weight
+    )
+
+
+def outlier_classification_loss(
+    assignment_probs,
+    scene_ids
+):
+    """
+    assignment_probs: [B, N, K+1]
+    scene_ids: [B, N], -1 = outlier
+    """
+    dustbin_probs = assignment_probs[..., -1]
+
+    targets = (scene_ids < 0).float()
+
+    return F.binary_cross_entropy(
+        dustbin_probs.clamp(1e-6, 1.0 - 1e-6),
+        targets
+    )
+
+
+def rotation_geodesic_error(R_pred, R_gt):
+    """
+    Returns angular error in radians.
+    R_pred, R_gt: [..., 3, 3]
+    """
+    R_rel = R_gt.transpose(-1, -2) @ R_pred
+
+    trace = (
+        R_rel[..., 0, 0]
+        + R_rel[..., 1, 1]
+        + R_rel[..., 2, 2]
+    )
+
+    cos_theta = ((trace - 1.0) / 2.0).clamp(-1.0, 1.0)
+
+    skew = R_rel - R_rel.transpose(-1, -2)
+
+    vee = torch.stack(
+        [
+            skew[..., 2, 1],
+            skew[..., 0, 2],
+            skew[..., 1, 0]
+        ],
+        dim=-1
+    )
+
+    sin_theta = 0.5 * torch.linalg.vector_norm(
+        vee, dim=-1
+    )
+
+    return torch.atan2(sin_theta, cos_theta)
+
+
+def absolute_pose_loss(
+    T_pred,
+    T_gt,
+    scene_ids,
+    rotation_weight=1.0,
+    translation_weight=1.0
+):
+    """
+    T_pred, T_gt: [B, N, 4, 4]
+    scene_ids: [B, N]
+
+    Исключает выбросы и объекты с некорректными GT-позами.
+    """
+
+    # Объект должен быть inlier и иметь конечную GT-позу.
+    valid = (
+        (scene_ids >= 0)
+        & torch.isfinite(T_gt).all(dim=(-2, -1))
+    )
+
+    if not valid.any():
+        return T_pred.sum() * 0.0
+
+    # Фильтруем объекты ДО любых геометрических операций.
+    T_pred_valid = T_pred[valid]
+    T_gt_valid = T_gt[valid]
+
+    R_pred = T_pred_valid[..., :3, :3]
+    R_gt = T_gt_valid[..., :3, :3]
+
+    t_pred = T_pred_valid[..., :3, 3]
+    t_gt = T_gt_valid[..., :3, 3]
+
+    rotation_error = rotation_geodesic_error(
+        R_pred, R_gt
+    )
+
+    translation_error = F.smooth_l1_loss(
+        t_pred,
+        t_gt,
+        reduction="none"
+    ).sum(dim=-1)
+
+    loss = (
+        rotation_weight * rotation_error
+        + translation_weight * translation_error
+    )
+
+    return loss.mean()
+
+
+def so3_log(R):
+    """
+    R: [..., 3, 3]
+    Returns rotation vector [..., 3].
+    """
+    trace = R.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+
+    cos_theta = ((trace - 1.0) / 2.0).clamp(-1.0, 1.0)
+
+    skew = R - R.transpose(-1, -2)
+
+    vee = torch.stack(
+        [
+            skew[..., 2, 1],
+            skew[..., 0, 2],
+            skew[..., 1, 0]
+        ],
+        dim=-1
+    )
+
+    sin_theta = 0.5 * torch.linalg.vector_norm(
+        vee, dim=-1
+    )
+
+    theta = torch.atan2(sin_theta, cos_theta)
+
+    scale_regular = theta / (
+        2.0 * sin_theta.clamp_min(1e-8)
+    )
+
+    scale_small = 0.5 + theta * theta / 12.0
+
+    scale = torch.where(
+        theta < 1e-4,
+        scale_small,
+        scale_regular
+    )
+
+    return scale.unsqueeze(-1) * vee
+
+
+def se3_log(T):
+    """
+    T: [..., 4, 4]
+    Returns xi = [rho, phi], [..., 6].
+    """
+    R = T[..., :3, :3]
+    t = T[..., :3, 3]
+
+    phi = so3_log(R)
+
+    theta2 = (phi * phi).sum(dim=-1, keepdim=True)
+    theta = torch.sqrt(theta2.clamp_min(1e-12))
+
+    phi_hat = skew_symmetric(phi)
+    phi_hat2 = phi_hat @ phi_hat
+
+    # Inverse left Jacobian:
+    # J^-1 = I - 0.5*phi_hat + C*phi_hat^2
+    C_regular = (
+        1.0 / theta2.clamp_min(1e-12)
+        - (1.0 + torch.cos(theta)) /
+        (2.0 * theta * torch.sin(theta)).clamp_min(1e-8)
+    )
+
+    C_small = 1.0 / 12.0 + theta2 / 720.0
+
+    C = torch.where(
+        theta2 < 1e-6,
+        C_small,
+        C_regular
+    )[..., None]
+
+    eye = torch.eye(
+        3, device=T.device, dtype=T.dtype
+    ).expand(*T.shape[:-2], 3, 3)
+
+    J_inv = eye - 0.5 * phi_hat + C * phi_hat2
+
+    rho = (J_inv @ t.unsqueeze(-1)).squeeze(-1)
+
+    return torch.cat([rho, phi], dim=-1)
+
+
+def invert_se3(T):
+    """
+    Аналитическая inverse для rigid transformation.
+    """
+    R = T[..., :3, :3]
+    t = T[..., :3, 3]
+
+    R_inv = R.transpose(-1, -2)
+    t_inv = -(R_inv @ t.unsqueeze(-1)).squeeze(-1)
+
+    T_inv = torch.zeros_like(T)
+    T_inv[..., :3, :3] = R_inv
+    T_inv[..., :3, 3] = t_inv
+    T_inv[..., 3, 3] = 1.0
+
+    return T_inv
+
+
+def cluster_aware_geometric_loss(
+    T_pred,
+    T_gt,
+    assignment_probs,
+    scene_ids,
+    translation_weight=1.0,
+    rotation_weight=1.0
+):
+    """
+    T_pred, T_gt: [B, N, 4, 4]
+    assignment_probs: [B, N, K+1]
+    scene_ids: [B, N], -1 = outlier
+
+    Invalid GT transformations are excluded.
+    """
+
+    B, N = scene_ids.shape
+
+    scene_probs = assignment_probs[..., :-1]
+
+    total_loss = T_pred.sum() * 0.0
+    total_weight = T_pred.sum() * 0.0
+
+    for b in range(B):
+
+        labels = scene_ids[b]
+
+        # 1. Проверяем конечность GT transforms.
+        finite_mask = torch.isfinite(T_gt[b]).all(dim=(-2, -1))
+
+        # 2. Исключаем outliers и некорректные GT.
+        valid_mask = (labels >= 0) & finite_mask
+
+        valid_indices = torch.where(valid_mask)[0]
+
+        # Нужно минимум два валидных объекта.
+        if len(valid_indices) < 2:
+            continue
+
+        # 3. Работаем только с валидными объектами.
+        T_pred_valid = T_pred[b, valid_indices]
+        T_gt_valid = T_gt[b, valid_indices]
+
+        probs_valid = scene_probs[b, valid_indices]
+        labels_valid = labels[valid_indices]
+
+        # 4. Формируем маску пар одной GT-сцены.
+        pair_mask = (
+            labels_valid[:, None] == labels_valid[None, :]
+        )
+
+        M = len(valid_indices)
+
+        eye = torch.eye(
+            M,
+            device=T_pred.device,
+            dtype=torch.bool
+        )
+
+        pair_mask = pair_mask & (~eye)
+
+        if not pair_mask.any():
+            continue
+
+        # 5. Relative predicted transforms.
+        T_i_inv = invert_se3(T_pred_valid)
+
+        T_ij_pred = (
+            T_i_inv[:, None] @ T_pred_valid[None, :]
+        )
+
+        # 6. Relative GT transforms.
+        T_i_gt_inv = invert_se3(T_gt_valid)
+
+        T_ij_gt = (
+            T_i_gt_inv[:, None] @ T_gt_valid[None, :]
+        )
+
+        # 7. Error transform.
+        T_error = (
+            invert_se3(T_ij_gt) @ T_ij_pred
+        )
+
+        error_twist = se3_log(T_error)
+
+        rho_error = error_twist[..., :3]
+        phi_error = error_twist[..., 3:]
+
+        geometric_error = (
+            translation_weight * (rho_error ** 2).sum(dim=-1)
+            + rotation_weight * (phi_error ** 2).sum(dim=-1)
+        )
+
+        # 8. Assignment co-membership.
+        pair_weights = (
+            probs_valid @ probs_valid.transpose(0, 1)
+        )
+
+        weights = pair_weights * pair_mask.float()
+
+        total_loss = total_loss + (
+            weights * geometric_error
+        ).sum()
+
+        total_weight = total_weight + weights.sum()
+
+    return total_loss / total_weight.clamp_min(1e-8)
+
+
+def compute_total_loss(
+    outputs,
+    scene_ids,
+    T_gt,
+    weights=None
+):
+    if weights is None:
+        weights = {
+            "contrastive": 1.0,
+            "assignment": 1.0,
+            "activity": 1.0,
+            "outlier": 0.2,
+            "pose": 1.0,
+            "cag": 0.05
+        }
+    elif isinstance(weights, (list, tuple)):
+        weights = {
+            "contrastive": weights[0],
+            "assignment": weights[1],
+            "activity": weights[2],
+            "outlier": weights[3],
+            "pose": weights[4],
+            "cag": weights[5]
+        }
+
+    # 1. Contrastive.
+    loss_contrastive = supervised_contrastive_loss(
+        outputs["contrastive_embeddings"],
+        scene_ids
+    )
+
+    # 2. Hungarian assignment.
+    loss_assignment, activity_targets = (
+        hungarian_assignment_loss(
+            outputs["assignment_logits"],
+            scene_ids
+        )
+    )
+
+    # 3. Scene slot activity.
+    loss_activity = slot_activity_loss(
+        outputs["activity_logits"],
+        activity_targets
+    )
+
+    # 4. Outlier classification.
+    loss_outlier = outlier_classification_loss(
+        outputs["assignment_probs"],
+        scene_ids
+    )
+
+    # 5. Absolute pose.
+    loss_pose = absolute_pose_loss(
+        outputs["poses"],
+        T_gt,
+        scene_ids
+    )
+
+    # 6. Cluster-aware geometric loss.
+    loss_cag = cluster_aware_geometric_loss(
+        outputs["poses"],
+        T_gt,
+        outputs["assignment_probs"],
+        scene_ids
+    )
+
+    losses = {
+        "contrastive": loss_contrastive,
+        "assignment": loss_assignment,
+        "activity": loss_activity,
+        "outlier": loss_outlier,
+        "pose": loss_pose,
+        "cag": loss_cag
     }
-    return total, parts
+
+    total = sum(
+        weights[name] * loss
+        for name, loss in losses.items()
+    )
+
+    total = torch.sum(
+        torch.stack(
+            tuple(weights[name] * loss
+            for name, loss in losses.items())
+        )
+    )
+
+    return total, losses

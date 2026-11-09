@@ -24,13 +24,13 @@ from sfm_rotations.data import build_transforms
 from sfm_rotations.data import load_labels
 from sfm_rotations.data import train_val_split_by_cluster
 from sfm_rotations.dvc_utils import pull_dvc_data
-from sfm_rotations.losses import compute_losses
-from sfm_rotations.losses import rotation_6d_to_matrix
+from sfm_rotations.losses import compute_total_loss
 from sfm_rotations.metrics import EvalOutputs
 from sfm_rotations.metrics import compute_all_metrics
 from sfm_rotations.metrics import format_metrics
 from sfm_rotations.metrics import load_thresholds
 from sfm_rotations.model import SfMModel
+from sfm_rotations.model_utils import make_se3
 
 load_dotenv()
 
@@ -99,9 +99,17 @@ def run_epoch(
         for batch_images, batch_labels in progress:
             images = batch_images.to(device)
             labels = {key: value.to(device) for key, value in batch_labels.items()}
+            scene_ids = labels["scene_label"].unsqueeze(0)
 
-            embeddings, translations, rotations_6d = model(images)
-            total_loss, _ = compute_losses(embeddings, translations, rotations_6d, labels, loss_weights)
+            T_gt = make_se3(labels["rotation_matrix"].reshape((labels["rotation_matrix"].shape[0], 3, 3)), labels["translation_vector"]).unsqueeze(0)
+
+            outputs = model(images.unsqueeze(0))
+            total_loss, _ = compute_total_loss(
+                outputs=outputs,
+                scene_ids=scene_ids,
+                T_gt=T_gt,
+                weights=loss_weights
+            )
 
             if optimizer is not None:
                 optimizer.zero_grad(set_to_none=True)
@@ -143,10 +151,11 @@ def collect_outputs(model: SfMModel, loader: DataLoader, device: str, meta: pd.D
     embeddings, rotations, translations, rotations_gt, translations_gt = [], [], [], [], []
 
     for images, labels in tqdm(loader, desc="eval"):
-        emb, trans, rot_6d = model(images.to(device))
-        embeddings.append(emb.float().cpu())
-        translations.append(trans.float().cpu())
-        rotations.append(rotation_6d_to_matrix(rot_6d).float().cpu())
+        outputs = model(images.to(device).unsqueeze(0))
+        poses = outputs["poses"].squeeze(0)
+        embeddings.append(outputs["contrastive_embeddings"].squeeze(0).float().cpu())
+        translations.append(poses[..., :3, 3].float().cpu())
+        rotations.append(poses[..., :3, :3].float().cpu())
         rotations_gt.append(labels["rotation_matrix"])
         translations_gt.append(labels["translation_vector"])
 
@@ -265,7 +274,12 @@ def main(cfg: DictConfig) -> None:
         model = SfMModel(
             backbone_name=cfg.backbone,
             embedding_dim=cfg.embedding_dim,
-            freeze_backbone=cfg.freeze_backbone,
+            num_scene_slots=8,
+            projection_dim=128,
+            transformer_layers=2,
+            transformer_heads=8,
+            slot_iterations=3,
+            freeze_backbone=cfg.freeze_backbone
         ).to(device)
         optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=cfg.lr)
 
