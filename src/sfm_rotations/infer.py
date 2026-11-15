@@ -17,6 +17,7 @@ from sfm_rotations.contracts import OUTLIER_LABEL
 from sfm_rotations.contracts import OUTLIER_SCENE
 from sfm_rotations.contracts import SUBMISSION_COLUMNS
 from sfm_rotations.contracts import VALUE_SEPARATOR
+from sfm_rotations.data import IMAGE_EXTENSIONS
 from sfm_rotations.data import build_transforms
 from sfm_rotations.dvc_utils import pull_dvc_data
 from sfm_rotations.geometry import GeometryConfig
@@ -68,7 +69,10 @@ def load_model(cfg: DictConfig, device: str) -> SfMModel:
     ).to(device)
 
     print(f"Loading checkpoint from {checkpoint_path}...")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    # weights_only=False: чекпоинт сохранён train.py этого же репозитория и лежит
+    # в доверенном DVC-remote; в метаданных обучения — numpy-скаляры и dtype'ы,
+    # которые weights_only-режим torch>=2.6 по умолчанию отвергает.
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint.get("model", checkpoint))
     return model.eval()
 
@@ -187,8 +191,7 @@ def main(cfg: DictConfig) -> None:
             required_paths=[test_dir],
         )
 
-    image_extensions = {".png", ".jpg", ".jpeg"}
-    image_paths = sorted(p for p in test_dir.rglob("*") if p.suffix.lower() in image_extensions)
+    image_paths = sorted(p for p in test_dir.rglob("*") if p.suffix.lower() in IMAGE_EXTENSIONS)
     if not image_paths:
         print(f"No test images found in {test_dir}!")
         return

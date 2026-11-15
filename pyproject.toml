@@ -28,6 +28,9 @@ dependencies = [
   "lightglue",
 ]
 
+[project.scripts]
+reconstruct = "sfm_rotations.cli:run_console"
+
 [dependency-groups]
 dev = [
   "pre-commit>=4.0.1",
