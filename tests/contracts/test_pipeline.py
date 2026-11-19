@@ -19,7 +19,6 @@ from sfm_rotations import infer
 from sfm_rotations import model
 from sfm_rotations import train
 from sfm_rotations.contracts import OUTLIER_SCENE
-from sfm_rotations.contracts import ContractError
 from sfm_rotations.contracts import Protocol
 from sfm_rotations.contracts import validate_checkpoint
 from sfm_rotations.contracts import validate_metrics
@@ -107,13 +106,6 @@ def _write_test_dir(test_dir: Path, images: dict[str, list[np.ndarray]]) -> None
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("key", ["backbone", "embedding_dim", "cluster_distance", "min_cluster_size"])
-def test_infer_config_matches_train_config(repo_root: Path, key: str):
-    """Пока чекпоинт не хранит конфиг (расхождение #3), эти параметры продублированы и обязаны совпадать."""
-    train_cfg, infer_cfg = load_config(repo_root, "baseline_train"), load_config(repo_root, "baseline_infer")
-    assert infer_cfg[key] == train_cfg[key]
-
-
 def test_infer_default_checkpoint_is_train_output(repo_root: Path):
     train_cfg, infer_cfg = load_config(repo_root, "baseline_train"), load_config(repo_root, "baseline_infer")
     assert Path(infer_cfg.checkpoint).parent == Path(train_cfg.checkpoints)
@@ -147,10 +139,6 @@ def test_best_checkpoint_selected_by_primary_metric(train_run: Path, protocol: P
     assert best["metrics"][protocol.primary_metric] == max(scores)
 
 
-@pytest.mark.xfail(
-    reason="#3: в чекпоинте нет protocol_version, model_config и postprocess",
-    raises=ContractError,
-)
 def test_train_checkpoint_follows_contract(train_run: Path):
     validate_checkpoint(_load_checkpoint(train_run / "checkpoints" / "best.pt"))
 
@@ -199,7 +187,7 @@ def test_infer_clusters_within_dataset(
     Внутри датасета кластер из 2 картинок меньше min_cluster_size, и все они выбросы;
     общая кластеризация склеивает 4 картинки в один кластер.
     """
-    assert load_config(repo_root, "baseline_infer").min_cluster_size > 2
+    assert load_config(repo_root, "baseline_train").min_cluster_size > 2  # попадает в чекпоинт
     image = random_pixels(rng)
     _write_test_dir(tmp_path / "test", {"ds_x": [image, image], "ds_y": [image, image]})
     output = run_infer(tmp_path / "test")

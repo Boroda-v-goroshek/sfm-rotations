@@ -33,9 +33,10 @@ def main(cfg: DictConfig) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Evaluating {len(val)} validation images on {device}")
 
-    model = load_model(cfg, device)
+    model, checkpoint = load_model(cfg, device)
+    postprocess = checkpoint["postprocess"]
     paths = [Path(path) for path in val["image_path"]]
-    embeddings = compute_embeddings(model, paths, cfg, device)
+    embeddings = compute_embeddings(model, paths, checkpoint["model_config"]["image_size"], cfg, device)
     reconstructor = build_reconstructor(cfg, device)
 
     rotations = np.full((len(val), 3, 3), np.nan)
@@ -46,8 +47,9 @@ def main(cfg: DictConfig) -> None:
             [paths[i] for i in indices],
             embeddings[indices],
             reconstructor,
-            cfg.cluster_distance,
-            cfg.min_cluster_size,
+            postprocess["cluster_distance"],
+            postprocess["min_cluster_size"],
+            postprocess.get("linkage", "average"),
         )
 
     outputs = EvalOutputs(
@@ -63,8 +65,9 @@ def main(cfg: DictConfig) -> None:
     metrics = compute_all_metrics(
         outputs,
         load_thresholds(data_root),
-        distance_threshold=cfg.cluster_distance,
-        min_cluster_size=cfg.min_cluster_size,
+        distance_threshold=postprocess["cluster_distance"],
+        min_cluster_size=postprocess["min_cluster_size"],
+        linkage=postprocess.get("linkage", "average"),
     )
     metrics["pose/registered_fraction"] = float(np.isfinite(rotations).all(axis=(1, 2)).mean())
     print(format_metrics(metrics))

@@ -331,7 +331,8 @@ def build_transforms(image_size: int = 224) -> tuple[transforms.Compose, transfo
     Build image transforms for training and validation.
 
     Train:
-        - resize, light color jitter, ImageNet normalization.
+        - random resized crop (a scene is recognised from a part of the view too),
+          horizontal flip, color jitter, rare grayscale, ImageNet normalization.
 
     Validation:
         - resize, ImageNet normalization.
@@ -339,23 +340,35 @@ def build_transforms(image_size: int = 224) -> tuple[transforms.Compose, transfo
     Parameters
     ----------
     image_size:
-        Side of the square output image.
+        Side of the square output image; a multiple of the DINOv2 patch size (14).
 
     Returns
     -------
     train_transform, val_transform
 
     """
-    resize = transforms.Resize((image_size, image_size), interpolation=InterpolationMode.BICUBIC)
     normalize = transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
 
     train_transform = transforms.Compose(
         [
-            resize,
-            transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.05, hue=0.01),
+            transforms.RandomResizedCrop(
+                image_size,
+                scale=(0.35, 1.0),
+                ratio=(0.75, 1.33),
+                interpolation=InterpolationMode.BICUBIC,
+            ),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomApply([transforms.ColorJitter(0.3, 0.3, 0.2, 0.03)], p=0.8),
+            transforms.RandomGrayscale(p=0.1),
             transforms.ToTensor(),
             normalize,
         ],
     )
-    val_transform = transforms.Compose([resize, transforms.ToTensor(), normalize])
+    val_transform = transforms.Compose(
+        [
+            transforms.Resize((image_size, image_size), interpolation=InterpolationMode.BICUBIC),
+            transforms.ToTensor(),
+            normalize,
+        ],
+    )
     return train_transform, val_transform

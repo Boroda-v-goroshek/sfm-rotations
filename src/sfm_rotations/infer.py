@@ -40,41 +40,47 @@ class InferenceDataset(Dataset):
         return self.transform(image) if self.transform else image
 
 
-def load_model(cfg: DictConfig, device: str) -> SfMModel:
+def load_model(cfg: DictConfig, device: str) -> tuple[SfMModel, dict]:
     """
-    Build the model and load the checkpoint.
+    Rebuild the model from the checkpoint and load its weights.
 
     Parameters
     ----------
     cfg:
-        Inference config.
+        Inference config (only cfg.checkpoint is used).
 
     device:
         Torch device.
 
     Returns
     -------
-    model in eval mode
+    model in eval mode, checkpoint (model_config, postprocess, ...)
 
     """
     checkpoint_path = Path(cfg.checkpoint)
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Нет чекпоинта {checkpoint_path}")
 
-    model = SfMModel(
-        backbone_name=cfg.backbone,
-        embedding_dim=cfg.embedding_dim,
-        freeze_backbone=False,
-    ).to(device)
-
     print(f"Loading checkpoint from {checkpoint_path}...")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(checkpoint.get("model", checkpoint))
-    return model.eval()
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    model_config = checkpoint["model_config"]
+    model = SfMModel(
+        backbone_name=model_config["backbone"],
+        embedding_dim=model_config["embedding_dim"],
+        pooling=model_config.get("pooling", "cls"),
+    )
+    model.load_state_dict(checkpoint["model"])
+    return model.to(device).eval(), checkpoint
 
 
 @torch.no_grad()
-def compute_embeddings(model: SfMModel, image_paths: list[Path], cfg: DictConfig, device: str) -> np.ndarray:
+def compute_embeddings(
+    model: SfMModel,
+    image_paths: list[Path],
+    image_size: int,
+    cfg: DictConfig,
+    device: str,
+) -> np.ndarray:
     """
     Compute L2-normalized scene embeddings.
 
@@ -85,6 +91,9 @@ def compute_embeddings(model: SfMModel, image_paths: list[Path], cfg: DictConfig
 
     image_paths:
         Image files [N].
+
+    image_size:
+        Input side the model was trained with (checkpoint model_config).
 
     cfg:
         Inference config.
@@ -97,14 +106,16 @@ def compute_embeddings(model: SfMModel, image_paths: list[Path], cfg: DictConfig
     embeddings [N, D]
 
     """
-    _, val_transform = build_transforms()
+    _, val_transform = build_transforms(image_size)
     loader = DataLoader(
         InferenceDataset(image_paths, transform=val_transform),
         batch_size=cfg.batch_size,
         shuffle=False,
         num_workers=cfg.num_workers,
     )
-    embeddings = [model(images.to(device))[0].float().cpu() for images in tqdm(loader, desc="embeddings")]
+    embeddings = []
+    for images in tqdm(loader, desc="embeddings"):
+        embeddings.append(torch.from_numpy(model.predict(images.to(device)).embeddings))
     return F.normalize(torch.cat(embeddings), dim=1).numpy()
 
 
@@ -114,6 +125,7 @@ def reconstruct_dataset(
     reconstructor: Reconstructor,
     distance_threshold: float,
     min_cluster_size: int,
+    linkage: str = "average",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Cluster the images of one dataset and reconstruct every cluster.
@@ -135,12 +147,15 @@ def reconstruct_dataset(
     min_cluster_size:
         Clusters smaller than this are treated as outliers.
 
+    linkage:
+        Linkage of the agglomerative clustering.
+
     Returns
     -------
     cluster id [N], rotations [N, 3, 3], translations [N, 3]; poses are NaN where not registered
 
     """
-    clusters = cluster_embeddings(embeddings, distance_threshold, min_cluster_size)
+    clusters = cluster_embeddings(embeddings, distance_threshold, min_cluster_size, linkage)
     rotations = np.full((len(image_paths), 3, 3), np.nan)
     translations = np.full((len(image_paths), 3), np.nan)
 
@@ -197,8 +212,9 @@ def main(cfg: DictConfig) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Inference device: {device}")
 
-    model = load_model(cfg, device)
-    embeddings = compute_embeddings(model, image_paths, cfg, device)
+    model, checkpoint = load_model(cfg, device)
+    embeddings = compute_embeddings(model, image_paths, checkpoint["model_config"]["image_size"], cfg, device)
+    postprocess = checkpoint["postprocess"]
     reconstructor = build_reconstructor(cfg, device)
 
     # Сцены кластеризуются внутри датасета: так считает метрика соревнования.
@@ -211,8 +227,9 @@ def main(cfg: DictConfig) -> None:
             paths,
             embeddings[indices],
             reconstructor,
-            cfg.cluster_distance,
-            cfg.min_cluster_size,
+            postprocess["cluster_distance"],
+            postprocess["min_cluster_size"],
+            postprocess.get("linkage", "average"),
         )
         for path, cluster, rotation, translation in zip(paths, clusters, rotations, translations, strict=True):
             rows.append(

@@ -1,23 +1,40 @@
 data_root: data
 checkpoints: checkpoints/baseline
-backbone: facebook/dinov2-base
-embedding_dim: 256
+
+# Модель. Эмбеддинг сцены = [CLS, mean(patch)] DINOv2-large без проекции: на ~30 сценах
+# случайная голова и полностью размороженный бэкбон переобучаются и обобщаются хуже предобученного.
+backbone: facebook/dinov2-large
+image_size: 448
+pooling: cls+mean
+embedding_dim: 0
+train_blocks: 2
 freeze_backbone: false
-epochs: 2
-lr: 2e-05
+
+epochs: 10
+lr: 3e-06
+lr_head: 1e-03
+weight_decay: 0.05
+warmup_fraction: 0.1
+temperature: 0.1
 loss_weights: [1.0, 0.0, 0.0]
+eval_pretrained: true
+
 val_fraction: 0.2
-num_workers: 0
+num_workers: 8
 seed: 42
-batch_size: 21
-clusters_per_batch: 6
+batch_size: 56
+clusters_per_batch: 7
 outlier_fraction: 0.125
 val_batch_size: 16
 val_clusters_per_batch: 3
 val_outlier_fraction: 0.25
 eval_batch_size: 32
-cluster_distance: 0.3
+
+# Кластеризация (попадает в чекпоинт, инференс берёт её оттуда).
+cluster_distance: 0.225
+linkage: single
 min_cluster_size: 3
+
 dvc_pull: true
 logging: true
 mlflow_tracking_uri: ${oc.env:MLFLOW_TRACKING_URI,http://127.0.0.1:8080}
