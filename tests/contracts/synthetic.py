@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import hydra
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
@@ -37,7 +38,28 @@ class TinyAutoModel:
 
 def load_config(repo_root: Path, name: str, **overrides: object) -> DictConfig:
     """Load configs/<name>.yaml the way Hydra would, with overrides on top."""
-    cfg = OmegaConf.merge(OmegaConf.load(repo_root / "configs" / f"{name}.yaml"), overrides)
+    if name in ("inference", "fast"):
+        cfg_dir = repo_root / "configs" / "inference"
+        cfg_name = "fast"
+    elif name in ("train", "main") and (repo_root / "configs" / "train" / "main.yaml").exists():
+        cfg_dir = repo_root / "configs" / "train"
+        cfg_name = "main"
+    elif (repo_root / "configs" / "train" / f"{name}.yaml").exists():
+        cfg_dir = repo_root / "configs" / "train"
+        cfg_name = name
+    elif (repo_root / "configs" / "inference" / f"{name}.yaml").exists():
+        cfg_dir = repo_root / "configs" / "inference"
+        cfg_name = name
+    elif (repo_root / "configs" / "evaluate" / f"{name}.yaml").exists():
+        cfg_dir = repo_root / "configs" / "evaluate"
+        cfg_name = name
+    else:
+        cfg_dir = repo_root / "configs"
+        cfg_name = name
+
+    with hydra.initialize_config_dir(config_dir=str(cfg_dir), version_base=None):
+        cfg = hydra.compose(config_name=cfg_name)
+    cfg = OmegaConf.merge(cfg, overrides)
     assert isinstance(cfg, DictConfig)
     return cfg
 

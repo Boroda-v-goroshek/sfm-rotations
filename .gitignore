@@ -215,13 +215,14 @@ __marimo__/
 dataset
 pipelines/notebooks
 *.png
+!plots/*.png
 logging/
 image-matching-challenge-2025.zip
 image-matching-challenge-2025
 /checkpoints/*
 !/checkpoints/*.dvc
-plots/
 
 # Hydra outputs
 outputs/
 multirun/
+results/

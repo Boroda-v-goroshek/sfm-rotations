@@ -21,7 +21,7 @@ from sfm_rotations.metrics import format_metrics
 from sfm_rotations.metrics import load_thresholds
 
 
-@hydra.main(version_base=None, config_path="../../configs", config_name="baseline_infer")
+@hydra.main(version_base=None, config_path="../../configs/evaluate", config_name="fast")
 def main(cfg: DictConfig) -> None:
     """Reconstruct validation scenes and compute the protocol metrics."""
     data_root = Path(cfg.data_root)
