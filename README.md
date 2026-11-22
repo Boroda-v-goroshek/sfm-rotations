@@ -182,14 +182,14 @@ python -c "from dotenv import load_dotenv; import mlflow; load_dotenv(); mlflow.
 ## Обучение
 
 Конфигурация обучения управляется с помощью **[Hydra](https://hydra.cc/)**.
-Все параметры по умолчанию заданы в файле [configs/baseline_train.yaml](configs/baseline_train.yaml).
+Все параметры по умолчанию заданы в файле [configs/train/main.yaml](configs/train/main.yaml).
 
 Обучение отвечает только за кластеризацию сцен: DINOv2 с проекционной головой учится на SupCon loss, чтобы картинки одной сцены были близки, а разных сцен и выбросы далеки. Головы поз остаются в модели, но у них нулевой вес в лоссе, а позы считает геометрия на инференсе (см. [Инференс](#%D0%B8%D0%BD%D1%84%D0%B5%D1%80%D0%B5%D0%BD%D1%81-infer)).
 
 #### Запуск обучения
 
 ```bash
-# 1. Запуск с параметрами по умолчанию из configs/baseline_train.yaml:
+# 1. Запуск с параметрами по умолчанию из configs/train/main.yaml:
 python -m sfm_rotations.train
 
 # 2. Запуск БЕЗ логирования в MLflow (для тестов и отладки пайплайна):
@@ -205,7 +205,7 @@ python -m sfm_rotations.train data_root=data checkpoints=checkpoints/exp1 "loss_
 python -m sfm_rotations.train --help
 ```
 
-#### Параметры конфигурации ([configs/baseline_train.yaml](configs/baseline_train.yaml))
+#### Параметры конфигурации ([configs/train/main.yaml](configs/train/main.yaml))
 
 | Параметр                 | По умолчанию            | Описание                                                                                                                         |
 | ------------------------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -229,7 +229,7 @@ python -m sfm_rotations.train --help
 | `eval_batch_size`        | `32`                    | Размер батча при расчёте метрик                                                                                                  |
 | `cluster_distance`       | `0.3`                   | Порог косинусного расстояния при кластеризации эмбеддингов                                                                       |
 | `min_cluster_size`       | `3`                     | Кластеры меньше этого размера считаются выбросами                                                                                |
-| `dvc_pull`               | `true`                  | Автоматически скачивать данные через DVC Python API                                                                              |
+| `dvc_pull`               | `false`                 | Автоматически скачивать данные через DVC Python API (`true`, `--dvc-pull` или `--no-dvc`)                                        |
 | `logging`                | `true`                  | Логирование в MLflow (`false` или флаг `--no-logging`)                                                                           |
 | `mlflow_tracking_uri`    | `http://127.0.0.1:8080` | Адрес MLflow сервера (подтягивается из `.env`)                                                                                   |
 | `mlflow_experiment_name` | `sfm-rotations`         | Название эксперимента в MLflow                                                                                                   |
@@ -267,7 +267,7 @@ python -m sfm_rotations.train --help
 
 Модель отвечает только за группировку картинок, а позы считает геометрия ([geometry.py](src/sfm_rotations/geometry.py)):
 
-1. DINOv2-эмбеддинги кластеризуются внутри каждого датасета.
+1. DINOv2-эмбеддинги кластеризуются внутри каждого датасета / сцены.
 1. Внутри кластера пары картинок отбираются по сходству эмбеддингов (`geometry.neighbors`).
 1. На парах работают ALIKED и LightGlue, матчи проверяются геометрически.
 1. Инкрементальный маппер COLMAP восстанавливает позы. Незарегистрированные картинки остаются в кластере с позой `nan`.
@@ -279,26 +279,63 @@ python -m sfm_rotations.train --help
 #### Запуск инференса:
 
 ```bash
-# 1. Запуск с параметрами по умолчанию (из configs/baseline_infer.yaml):
+# 1. Запуск с параметрами по умолчанию (configs/inference/fast.yaml на основе main.yaml):
 python -m sfm_rotations.infer
 
-# 2. Указание своего чекпоинта и пути сохранения:
-python -m sfm_rotations.infer checkpoint=checkpoints/baseline/best.pt output_path=predictions.json
+# 2. Запуск в режиме максимального качества (configs/inference/quality.yaml):
+python -m sfm_rotations.infer --config-name=quality
 
-# 3. Запуск на произвольной папке с изображениями:
-python -m sfm_rotations.infer test_dir=data/test dvc_pull=false
+# 3. Запуск на отдельной сцене (например, только stairs):
+python -m sfm_rotations.infer test_dir=data/test/stairs
+
+# 4. Запуск на нескольких сценах одновременно (общая папка data/test):
+python -m sfm_rotations.infer test_dir=data/test
+
+# 5. Запуск с автоматическим скачиванием данных через DVC (--dvc-pull):
+python -m sfm_rotations.infer --dvc-pull
+
+# 6. Указание своего чекпоинта и пути сохранения:
+python -m sfm_rotations.infer checkpoint=checkpoints/dinov2-large/best.pt output_path=predictions.csv
 ```
 
-Результаты инференса сохраняются в json-файл (`output_path`) и содержат:
+#### Раздельный инференс и сохранение результатов
 
-- Путь к изображению (`image_path`);
-- Предсказанный кластер сцены (`scene_cluster`);
-- Матрицу поворота камеры (`rotation_matrix` 3x3);
-- Вектор перемещения (`translation_vector` 3D).
+Скрипт инференса автоматически определяет структуру входной директории `test_dir`:
+
+- **Поддержка одиночной сцены и набора сцен:**
+
+  - Если передана папка с поддиректориями (например, `data/test`, где лежат `ETs/` и `stairs/`), инференс выполняется **полностью раздельно** для каждой сцены: эмбеддинги, кластеризация и 3D-реконструкция COLMAP работают независимо по очереди, исключая смешивание разных сцен и снижая пиковое потребление памяти.
+  - Если передана конкретная папка со снимками сцены (например, `data/test/stairs`), обрабатывается только она.
+
+- **Именование и структура выходных файлов:**
+
+  - Результаты автоматически сохраняются в папку с временной меткой: `results/YYYY-MM-DD_HH-MM-SS/` (настраивается в конфиге Hydra через `output_path: results/${now:%Y-%m-%d_%H-%M-%S}/...`).
+  - **Для каждой сцены создаётся свой отдельный CSV-файл** с суффиксом `_<scene_name>`: например, `dinov2-large_ETs.csv` и `dinov2-large_stairs.csv` (общий объединённый файл не создаётся).
+
+Каждый CSV-файл содержит колонки:
+
+- `dataset`: название сцены / датасета (`ETs`, `stairs`);
+- `scene`: предсказанный кластер сцены (`cluster0`, `cluster1` или `outliers`);
+- `image`: относительное имя файла изображения;
+- `rotation_matrix`: матрица поворота камеры (3x3, записанная через `;` в row-major порядке);
+- `translation_vector`: вектор перемещения (3D, через `;`).
+
+> **Что означает `nan` в позах:**
+> Если для конкретного кадра COLMAP не смог надёжно восстановить 3D-позу (из-за смаза, недостатка текстур или экстремального ракурса), в `rotation_matrix` и `translation_vector` записываются значения `nan`. Это официальный стандарт Image Matching Challenge: кадр остаётся привязанным к своему кластеру, а отсутствие позы сигнализирует проверяющей системе о незарегистрированной камере.
 
 ## Метрики
 
 `sfm_rotations.train` считает их по всей валидации и печатает после каждой эпохи, используя позы из необученных голов модели. `sfm_rotations.evaluate` считает те же метрики с позами из COLMAP и добавляет `pose/registered_fraction` — долю зарегистрированных картинок. Значения `pose/*`, `imc/mAA` и `imc/score` осмысленны только из `evaluate`.
+
+#### Запуск валидации (Evaluate)
+
+```bash
+# 1. Быстрая оценка (configs/evaluate/fast.yaml на основе main.yaml):
+python -m sfm_rotations.evaluate
+
+# 2. Оценка в режиме максимального качества (configs/evaluate/quality.yaml):
+python -m sfm_rotations.evaluate --config-name=quality
+```
 
 | Метрика                       | Что значит                                                                                                                                               | Хорошо                                           |
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
@@ -317,6 +354,6 @@ python -m sfm_rotations.infer test_dir=data/test dvc_pull=false
 - Если `imc/score` низкий, разберитесь, что именно проседает:
   - `emb/recall@1` высокий, а `emb/ARI` / `imc/clustering` низкие: эмбеддинги хорошие, плохо подобран порог. Подберите `cluster_distance` / `min_cluster_size`.
   - `emb/recall@1` низкий: проблема в самих эмбеддингах (contrastive-часть).
-  - Кластеры хорошие, но `imc/mAA` и `pose/rel_rot_mAA` низкие: проблема в геометрии. Посмотрите на `pose/registered_fraction` и параметры `geometry.*` в [configs/baseline_infer.yaml](configs/baseline_infer.yaml).
+  - Кластеры хорошие, но `imc/mAA` и `pose/rel_rot_mAA` низкие: проблема в геометрии. Посмотрите на `pose/registered_fraction` и параметры `geometry.*` в [configs/inference/fast.yaml](configs/inference/fast.yaml).
 - Для позы берём именно **относительный** поворот: у каждой сцены своя система координат, поэтому абсолютная ошибка позы бессмысленна.
 - `imc/*` считается без RANSAC, поэтому числа приблизительные. Сравнивайте между собой только запуски, посчитанные этим кодом.

@@ -220,8 +220,8 @@ image-matching-challenge-2025.zip
 image-matching-challenge-2025
 /checkpoints/*
 !/checkpoints/*.dvc
-plots/
 
 # Hydra outputs
 outputs/
 multirun/
+results/
