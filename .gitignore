@@ -218,7 +218,8 @@ pipelines/notebooks
 logging/
 image-matching-challenge-2025.zip
 image-matching-challenge-2025
-checkpoints/
+/checkpoints/*
+!/checkpoints/*.dvc
 plots/
 
 # Hydra outputs
