@@ -1,0 +1,9 @@
+data_root: data
+test_dir: data/test/stairs
+# Модель (backbone, image_size, pooling) и кластеризация (cluster_distance, linkage, min_cluster_size)
+# берутся из чекпоинта.
+checkpoint: checkpoints/baseline/best.pt
+output_path: results/${now:%Y-%m-%d_%H-%M-%S}/submission.csv
+batch_size: 32
+num_workers: 0
+dvc_pull: false

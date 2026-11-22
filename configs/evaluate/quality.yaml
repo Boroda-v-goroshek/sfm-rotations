@@ -1,5 +1,5 @@
 defaults:
-  - baseline_infer
+  - main
   - _self_
 
 checkpoint: checkpoints/dinov2-large/best.pt

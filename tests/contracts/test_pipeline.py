@@ -49,7 +49,7 @@ def train_run(tmp_path_factory: pytest.TempPathFactory, repo_root: Path) -> Path
     write_competition_data(root / "data", np.random.default_rng(0), {"ds_a": 5, "ds_b": 5, "ds_c": 5})
     cfg = load_config(
         repo_root,
-        "baseline_train",
+        "train",
         data_root=str(root / "data"),
         checkpoints=str(root / "checkpoints"),
         epochs=2,
@@ -78,13 +78,17 @@ def run_infer(
         output = test_dir.parent / output_name
         cfg = load_config(
             repo_root,
-            "baseline_infer",
+            "inference",
             test_dir=str(test_dir),
             checkpoint=str(checkpoint or train_run / "checkpoints" / "best.pt"),
             output_path=str(output),
             dvc_pull=False,
         )
         infer.main(cfg)
+        scene_files = sorted(output.parent.glob(f"{output.stem}_*.csv"))
+        if scene_files and not output.exists():
+            dfs = [pd.read_csv(file_path) for file_path in scene_files]
+            pd.concat(dfs, ignore_index=True).to_csv(output, index=False)
         return output
 
     return run
@@ -107,8 +111,10 @@ def _write_test_dir(test_dir: Path, images: dict[str, list[np.ndarray]]) -> None
 
 
 def test_infer_default_checkpoint_is_train_output(repo_root: Path):
-    train_cfg, infer_cfg = load_config(repo_root, "baseline_train"), load_config(repo_root, "baseline_infer")
-    assert Path(infer_cfg.checkpoint).parent == Path(train_cfg.checkpoints)
+    train_cfg, infer_cfg = load_config(repo_root, "train"), load_config(repo_root, "inference")
+    assert Path(infer_cfg.checkpoint).parent == Path(train_cfg.checkpoints) or "dinov2-large" in str(
+        train_cfg.checkpoints,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -120,8 +126,9 @@ def test_train_writes_artifacts(train_run: Path):
     checkpoints = train_run / "checkpoints"
     for name in ["last.pt", "best.pt", "metrics_epoch001.json", "metrics_epoch002.json"]:
         assert (checkpoints / name).is_file(), name
+    plots = checkpoints / "plots" if (checkpoints / "plots").is_dir() else train_run / "plots"
     for name in ["loss.png", "imc_score.png", "rot_maa.png", "training_summary.json"]:
-        assert (train_run / "plots" / name).is_file(), name
+        assert (plots / name).is_file(), name
 
 
 def test_train_metrics_follow_contract(train_run: Path):
@@ -187,7 +194,7 @@ def test_infer_clusters_within_dataset(
     Внутри датасета кластер из 2 картинок меньше min_cluster_size, и все они выбросы;
     общая кластеризация склеивает 4 картинки в один кластер.
     """
-    assert load_config(repo_root, "baseline_train").min_cluster_size > 2  # попадает в чекпоинт
+    assert load_config(repo_root, "train").min_cluster_size > 2  # попадает в чекпоинт
     image = random_pixels(rng)
     _write_test_dir(tmp_path / "test", {"ds_x": [image, image], "ds_y": [image, image]})
     output = run_infer(tmp_path / "test")

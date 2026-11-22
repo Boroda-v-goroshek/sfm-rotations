@@ -1,6 +1,6 @@
 data_root: data
-checkpoints: checkpoints/baseline
-plots_dir: plots
+checkpoints: checkpoints/dinov2-large-${now:%Y-%m-%d_%H-%M-%S_%f}
+plots_dir: ${checkpoints}/plots
 
 # Модель. Эмбеддинг сцены = [CLS, mean(patch)] DINOv2-large без проекции: на ~30 сценах
 # случайная голова и полностью размороженный бэкбон переобучаются и обобщаются хуже предобученного.
@@ -36,7 +36,7 @@ cluster_distance: 0.225
 linkage: single
 min_cluster_size: 3
 
-dvc_pull: true
+dvc_pull: false
 logging: true
 mlflow_tracking_uri: ${oc.env:MLFLOW_TRACKING_URI,http://127.0.0.1:8080}
 mlflow_experiment_name: sfm-rotations

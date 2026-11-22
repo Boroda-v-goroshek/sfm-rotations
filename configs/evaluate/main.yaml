@@ -1,0 +1,4 @@
+data_root: data
+checkpoint: checkpoints/baseline/best.pt
+metrics_path: geometry_metrics.json
+batch_size: 32

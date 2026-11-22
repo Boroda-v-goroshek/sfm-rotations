@@ -322,7 +322,7 @@ def pull_train_data(data_root: Path) -> None:
     )
 
 
-@hydra.main(version_base=None, config_path="../../configs", config_name="baseline_train")
+@hydra.main(version_base=None, config_path="../../configs/train", config_name="main")
 def main(cfg: DictConfig) -> None:
     """Train the model, compute validation metrics and save checkpoints every epoch."""
     enable_mlflow = cfg.get("logging", True)
@@ -523,8 +523,13 @@ def main(cfg: DictConfig) -> None:
 if __name__ == "__main__":
     import sys
 
-    # Support convenience flags from CLI: --no-logging or --no-mlflow
+    # Support convenience flags from CLI: --no-logging, --no-mlflow, --dvc-pull, --no-dvc, --no-dvc-pull
     sys.argv = [
-        arg.replace("--no-logging", "logging=false").replace("--no-mlflow", "logging=false") for arg in sys.argv
+        arg.replace("--no-logging", "logging=false")
+        .replace("--no-mlflow", "logging=false")
+        .replace("--dvc-pull", "dvc_pull=true")
+        .replace("--no-dvc-pull", "dvc_pull=false")
+        .replace("--no-dvc", "dvc_pull=false")
+        for arg in sys.argv
     ]
     main()
