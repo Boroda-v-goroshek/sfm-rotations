@@ -11,7 +11,6 @@ groups images into clusters, and each cluster is reconstructed geometrically:
 Images the mapper does not register get NaN poses.
 """
 
-import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -342,7 +341,13 @@ class Reconstructor:
         rotations [N, 3, 3], translations [N, 3]; NaN for unregistered images
 
         """
-        image_dir = Path(os.path.commonpath([path.parent for path in paths]))
+        common_parts: list[str] = []
+        for parts in zip(*(path.parent.parts for path in paths), strict=False):
+            if len(set(parts)) == 1:
+                common_parts.append(parts[0])
+            else:
+                break
+        image_dir = Path(*common_parts) if common_parts else paths[0].parent
         names = [path.relative_to(image_dir).as_posix() for path in paths]
 
         extractor, resize, neighbors = self.extractor, self.config.resize, self.config.neighbors
