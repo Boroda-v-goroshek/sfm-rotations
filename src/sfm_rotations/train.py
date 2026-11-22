@@ -296,11 +296,12 @@ def evaluate(
 def log_run_params(cfg: DictConfig) -> None:
     """Log the git commit and the config of the run to MLflow."""
     try:
-        commit_id = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()  # noqa: S603, S607
+        commit_id = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT).decode().strip()  # noqa: S603, S607
     except Exception:
         commit_id = "unknown"
     mlflow.set_tag("git_commit_id", commit_id)
     mlflow.set_tag("mlflow.source.git.commit", commit_id)
+    mlflow.set_tag("protocol_version", PROTOCOL_VERSION)
     mlflow.log_param("git_commit_id", commit_id)
     mlflow.log_params(OmegaConf.to_container(cfg, resolve=True))
 
@@ -469,11 +470,11 @@ def main(cfg: DictConfig) -> None:
 
             if enable_mlflow:
                 for k, v in metrics.items():
-                    if isinstance(v, int | float):
+                    if isinstance(v, int | float) and math.isfinite(v):
                         clean_key = re.sub(r"[^a-zA-Z0-9_\-./ :]", "_", k.replace("@", "_at_"))
                         mlflow.log_metric(clean_key, v, step=epoch)
 
-        plots_dir = Path("plots")
+        plots_dir = Path(cfg.get("plots_dir", "plots"))
         plots_dir.mkdir(parents=True, exist_ok=True)
 
         epochs_range = history_epochs

@@ -1,5 +1,6 @@
 data_root: data
 checkpoints: checkpoints/baseline
+plots_dir: plots
 
 # Модель. Эмбеддинг сцены = [CLS, mean(patch)] DINOv2-large без проекции: на ~30 сценах
 # случайная голова и полностью размороженный бэкбон переобучаются и обобщаются хуже предобученного.

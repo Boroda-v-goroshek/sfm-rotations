@@ -219,6 +219,7 @@ logging/
 image-matching-challenge-2025.zip
 image-matching-challenge-2025
 checkpoints/
+plots/
 
 # Hydra outputs
 outputs/
