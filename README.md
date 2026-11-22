@@ -1,10 +1,8 @@
 # SFM-Rotations
 
-Structure from Motion Rotations
+## Использование uv
 
-#### Использование uv
-
-- Установка uv:
+### Установка uv:
 
 ```
 wget -qO- https://astral.sh/uv/install.sh | sh
@@ -26,7 +24,9 @@ pre-commit install
 uv pip install <пакет>
 ```
 
-#### В мейн не пушим
+## Работа с репозиторием
+
+### В мейн не пушим
 
 - Делаем свою ветку:
 
@@ -41,7 +41,7 @@ git checkout -b <ветка>
 git push origin <ветка, которую хотите запушить>
 ```
 
-#### Запуск pre-commit
+### Запуск pre-commit
 
 - Использование (из корня репоса):
 
@@ -180,7 +180,7 @@ python -c "from dotenv import load_dotenv; import mlflow; load_dotenv(); mlflow.
 Конфигурация обучения управляется с помощью **[Hydra](https://hydra.cc/)**.
 Все параметры по умолчанию заданы в файле [configs/train/main.yaml](configs/train/main.yaml).
 
-#### Запуск обучения
+### Запуск обучения
 
 ```bash
 # 1. Запуск с параметрами по умолчанию из configs/train/main.yaml:
@@ -210,7 +210,7 @@ python -m sfm_rotations.train --help
 
 При запуске автоматически подтягиваются тестовые данные через **DVC API** (файл `data/test.dvc`).
 
-#### Запуск инференса:
+### Запуск инференса:
 
 ```bash
 # 1. Запуск с параметрами по умолчанию (configs/inference/fast.yaml на основе main.yaml):
@@ -232,7 +232,7 @@ python -m sfm_rotations.infer --dvc-pull
 python -m sfm_rotations.infer checkpoint=checkpoints/dinov2-large/best.pt output_path=predictions.csv
 ```
 
-#### Раздельный инференс и сохранение результатов
+### Раздельный инференс и сохранение результатов
 
 Скрипт инференса автоматически определяет структуру входной директории `test_dir`:
 
@@ -268,7 +268,7 @@ python -m sfm_rotations.infer checkpoint=checkpoints/dinov2-large/best.pt output
 
 Именно по метрике `imc/score` на валидационном сплите автоматически выбирается лучший чекпоинт (`best.pt`).
 
-#### Запуск валидации (Evaluate)
+### Запуск валидации (Evaluate)
 
 ```bash
 # 1. Быстрая оценка (configs/evaluate/fast.yaml на основе main.yaml):
