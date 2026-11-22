@@ -15,3 +15,7 @@ geometry:
   resize: 1024
   min_matches: 15
   num_threads: -1
+  share_intrinsics: false
+  random_seed: -1
+  mapping_trials: 1
+  compact_same_resolution: false

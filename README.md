@@ -309,6 +309,21 @@ python -m sfm_rotations.infer test_dir=data/test dvc_pull=false
 - Матрицу поворота камеры (`rotation_matrix` 3x3);
 - Вектор перемещения (`translation_vector` 3D).
 
+## Оценка геометрии
+
+Подтяните размеченные данные и опубликованный чекпойнт для оценки на фиксированном val-сплите:
+
+```bash
+dvc pull data/train.dvc data/train_labels.csv.dvc data/train_thresholds.csv.dvc checkpoints/dinov2-large.dvc
+python -m sfm_rotations.evaluate --config-name geometry_quality
+```
+
+`evaluate` сохраняет итоговые метрики в `geometry_metrics.json`.
+
+`geometry_quality` использует общую калибровку и базовые параметры матчинга в кластерах с одинаковым
+разрешением кадров. Для кластеров с разным разрешением увеличивает число пар, размер изображения
+и лимит ключевых точек. Проверка матчей и реконструкция работают с фиксированным seed.
+
 ## Метрики
 
 `sfm_rotations.train` считает `imc/*` с эталонными позами по всей валидации. Эти значения измеряют качество кластеризации при идеальной геометрии. Метрики `pose/*` в обучении описывают необученные головы поз. Для оценки полного пайплайна `sfm_rotations.evaluate` использует позы из COLMAP и добавляет `pose/registered_fraction` — долю зарегистрированных картинок.
