@@ -62,7 +62,25 @@ def load_model(cfg: DictConfig, device: str) -> tuple[SfMModel, dict]:
         raise FileNotFoundError(f"Нет чекпоинта {checkpoint_path}")
 
     print(f"Loading checkpoint from {checkpoint_path}...")
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    except Exception:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+    if "model_config" not in checkpoint:
+        alt_path = Path("checkpoints/dinov2-large/best.pt")
+        if alt_path.exists():
+            print(
+                f"Внимание: в {checkpoint_path} нет 'model_config' (старый формат). "
+                f"Загружаем актуальный чекпоинт из {alt_path}.",
+            )
+            checkpoint = torch.load(alt_path, map_location="cpu")
+        else:
+            raise KeyError(
+                f"В чекпоинте {checkpoint_path} отсутствует 'model_config'. "
+                "Укажите актуальный чекпоинт (например, checkpoint=checkpoints/dinov2-large/best.pt).",
+            )
+
     model_config = checkpoint["model_config"]
     model = SfMModel(
         backbone_name=model_config["backbone"],
@@ -190,7 +208,7 @@ def _format_vector(values: np.ndarray) -> str:
     return VALUE_SEPARATOR.join("nan" if np.isnan(value) else f"{value:.9f}" for value in values.ravel())
 
 
-@hydra.main(version_base=None, config_path="../../configs", config_name="baseline_infer")
+@hydra.main(version_base=None, config_path="../../configs/inference", config_name="fast")
 def main(cfg: DictConfig) -> None:
     """Predict scene clusters and camera poses for test images and write submission.csv."""
     data_root = Path(cfg.data_root)
@@ -203,7 +221,7 @@ def main(cfg: DictConfig) -> None:
         )
 
     image_extensions = {".png", ".jpg", ".jpeg"}
-    image_paths = sorted(p for p in test_dir.rglob("*") if p.suffix.lower() in image_extensions)
+    image_paths = sorted(path for path in test_dir.rglob("*") if path.suffix.lower() in image_extensions)
     if not image_paths:
         print(f"No test images found in {test_dir}!")
         return
@@ -213,40 +231,76 @@ def main(cfg: DictConfig) -> None:
     print(f"Inference device: {device}")
 
     model, checkpoint = load_model(cfg, device)
-    embeddings = compute_embeddings(model, image_paths, checkpoint["model_config"]["image_size"], cfg, device)
     postprocess = checkpoint["postprocess"]
     reconstructor = build_reconstructor(cfg, device)
+    image_size = checkpoint["model_config"]["image_size"]
 
-    # Сцены кластеризуются внутри датасета: так считает метрика соревнования.
-    datasets = np.array([path.relative_to(test_dir).parts[0] for path in image_paths])
-    rows = []
-    for dataset in tqdm(np.unique(datasets), desc="datasets"):
-        indices = np.flatnonzero(datasets == dataset)
-        paths = [image_paths[i] for i in indices]
+    # Группируем картинки по сценам/папкам:
+    # 1. Если передана директория со сценами (data/test/<scene>/<image>)
+    # 2. Если передана отдельная сцена (data/test/stairs/<image>)
+    scene_images: dict[str, list[tuple[Path, str]]] = {}
+    for path in image_paths:
+        relative_parts = path.relative_to(test_dir).parts
+        if len(relative_parts) > 1:
+            scene_name = relative_parts[0]
+            image_name = path.relative_to(test_dir / relative_parts[0]).as_posix()
+        else:
+            scene_name = test_dir.name
+            image_name = path.name
+        scene_images.setdefault(scene_name, []).append((path, image_name))
+
+    output_path = Path(cfg.output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    for scene_name, image_info in scene_images.items():
+        paths = [image_path for image_path, _ in image_info]
+        names = [rel_name for _, rel_name in image_info]
+
+        print(f"\n--- Running inference for scene '{scene_name}' ({len(paths)} images) ---")
+        embeddings = compute_embeddings(model, paths, image_size, cfg, device)
         clusters, rotations, translations = reconstruct_dataset(
             paths,
-            embeddings[indices],
+            embeddings,
             reconstructor,
             postprocess["cluster_distance"],
             postprocess["min_cluster_size"],
             postprocess.get("linkage", "average"),
         )
-        for path, cluster, rotation, translation in zip(paths, clusters, rotations, translations, strict=True):
-            rows.append(
+
+        scene_rows = []
+        for image_name, cluster, rotation, translation in zip(
+            names,
+            clusters,
+            rotations,
+            translations,
+            strict=True,
+        ):
+            scene_rows.append(
                 {
-                    "dataset": dataset,
+                    "dataset": scene_name,
                     "scene": OUTLIER_SCENE if cluster == OUTLIER_LABEL else f"cluster{cluster}",
-                    "image": path.relative_to(test_dir / dataset).as_posix(),
+                    "image": image_name,
                     "rotation_matrix": _format_vector(rotation),
                     "translation_vector": _format_vector(translation),
                 },
             )
 
-    output_path = Path(cfg.output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows, columns=list(SUBMISSION_COLUMNS)).to_csv(output_path, index=False)
-    print(f"Inference completed! Saved {len(rows)} predictions to {output_path}")
+        # Сохраняем отдельный CSV-файл для сцены: <output_stem>_<scene_name>.csv
+        scene_csv_path = output_path.parent / f"{output_path.stem}_{scene_name}{output_path.suffix}"
+        pd.DataFrame(scene_rows, columns=list(SUBMISSION_COLUMNS)).to_csv(scene_csv_path, index=False)
+        print(f"Saved {len(scene_rows)} predictions for '{scene_name}' to {scene_csv_path}")
+
+    print("\nInference completed!")
 
 
 if __name__ == "__main__":
+    import sys
+
+    # Support convenience flags from CLI: --dvc-pull, --no-dvc, --no-dvc-pull
+    sys.argv = [
+        arg.replace("--dvc-pull", "dvc_pull=true")
+        .replace("--no-dvc-pull", "dvc_pull=false")
+        .replace("--no-dvc", "dvc_pull=false")
+        for arg in sys.argv
+    ]
     main()
