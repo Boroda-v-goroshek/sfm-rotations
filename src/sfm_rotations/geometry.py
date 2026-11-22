@@ -23,6 +23,7 @@ from lightglue import ALIKED
 from lightglue import LightGlue
 from lightglue.utils import load_image
 from lightglue.utils import rbd
+from PIL import Image
 from tqdm import tqdm
 
 
@@ -48,6 +49,18 @@ class GeometryConfig:
     num_threads:
         CPU threads of the mapper; -1 uses all of them.
 
+    share_intrinsics:
+        Reuse the same camera within a cluster of same-resolution images.
+
+    random_seed:
+        Seed for geometric verification and mapping. A negative value uses COLMAP defaults.
+
+    mapping_trials:
+        Number of seeded reconstructions to consider for each cluster.
+
+    compact_same_resolution:
+        Use baseline matching and shared intrinsics for same-resolution clusters.
+
     """
 
     neighbors: int = 20
@@ -55,6 +68,10 @@ class GeometryConfig:
     resize: int = 1024
     min_matches: int = 15
     num_threads: int = -1
+    share_intrinsics: bool = False
+    random_seed: int = -1
+    mapping_trials: int = 1
+    compact_same_resolution: bool = False
 
 
 def shortlist_pairs(embeddings: np.ndarray, neighbors: int) -> list[tuple[int, int]]:
@@ -88,11 +105,12 @@ def write_database(
     sizes: np.ndarray,
     keypoints: list[np.ndarray],
     matches: dict[tuple[int, int], np.ndarray],
+    share_intrinsics: bool = False,
 ) -> None:
     """
     Write images, keypoints and raw matches to a new COLMAP database.
 
-    Every image gets its own camera: collections are unordered and mix devices.
+    By default, each image has its own camera. Same-resolution clusters may share one camera.
 
     Parameters
     ----------
@@ -111,29 +129,36 @@ def write_database(
     matches:
         (i, j) -> keypoint index pairs [M, 2].
 
+    share_intrinsics:
+        Use one camera and rig if all image dimensions match.
+
     """
     image_ids = []
+    share_camera = share_intrinsics and len({tuple(size) for size in sizes}) == 1
     with pycolmap.Database.open(path) as database:
+        active_camera = None
         for name, (width, height), points in zip(names, sizes, keypoints, strict=True):
-            # Стандартная начальная оценка фокуса COLMAP при неизвестной калибровке.
-            camera = pycolmap.Camera.create_from_model_id(
-                pycolmap.INVALID_CAMERA_ID,
-                pycolmap.CameraModelId.SIMPLE_RADIAL,
-                1.2 * max(width, height),
-                int(width),
-                int(height),
-            )
-            camera_id = database.write_camera(camera)
+            if active_camera is None or not share_camera:
+                camera = pycolmap.Camera.create_from_model_id(
+                    pycolmap.INVALID_CAMERA_ID,
+                    pycolmap.CameraModelId.SIMPLE_RADIAL,
+                    1.2 * max(width, height),
+                    int(width),
+                    int(height),
+                )
+                camera_id = database.write_camera(camera)
+                sensor = pycolmap.sensor_t(pycolmap.SensorType.CAMERA, camera_id)
+                # Each camera uses a rig with a single reference sensor.
+                rig = pycolmap.Rig()
+                rig.add_ref_sensor(sensor)
+                active_camera = camera_id, sensor, database.write_rig(rig)
+            camera_id, sensor, rig_id = active_camera
             image_id = database.write_image(pycolmap.Image(name=name, camera_id=camera_id))
             database.write_keypoints(image_id, points.astype(np.float32))
             image_ids.append(image_id)
 
-            # С COLMAP 3.12 маппер работает с кадрами: одна камера — тривиальный rig из одного сенсора.
-            sensor = pycolmap.sensor_t(pycolmap.SensorType.CAMERA, camera_id)
-            rig = pycolmap.Rig()
-            rig.add_ref_sensor(sensor)
             frame = pycolmap.Frame()
-            frame.rig_id = database.write_rig(rig)
+            frame.rig_id = rig_id
             frame.add_data_id(pycolmap.data_t(sensor, image_id))
             database.write_frame(frame)
 
@@ -149,6 +174,9 @@ def map_images(
     keypoints: list[np.ndarray],
     matches: dict[tuple[int, int], np.ndarray],
     num_threads: int = -1,
+    share_intrinsics: bool = False,
+    random_seed: int = -1,
+    mapping_trials: int = 1,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Verify matches and reconstruct the largest model of a group of images.
@@ -176,6 +204,15 @@ def map_images(
     num_threads:
         CPU threads of the mapper.
 
+    share_intrinsics:
+        Reuse a camera within a cluster of same-resolution images.
+
+    random_seed:
+        Seed for geometric verification and mapping. A negative value uses COLMAP defaults.
+
+    mapping_trials:
+        Number of reconstruction attempts with distinct seeds.
+
     Returns
     -------
     rotations [N, 3, 3], translations [N, 3] (world -> camera); NaN for unregistered images
@@ -183,25 +220,50 @@ def map_images(
     """
     rotations = np.full((len(names), 3, 3), np.nan)
     translations = np.full((len(names), 3), np.nan)
+    if mapping_trials < 1:
+        raise ValueError("mapping_trials must be positive")
     if not matches:
         return rotations, translations
 
-    database_path = workdir / "database.db"
     pairs_path = workdir / "pairs.txt"
-    write_database(database_path, names, sizes, keypoints, matches)
     pairs_path.write_text("".join(f"{names[i]} {names[j]}\n" for i, j in matches))
-    pycolmap.verify_matches(database_path, pairs_path)
-
     options = pycolmap.IncrementalPipelineOptions()
     options.min_model_size = 3
     options.num_threads = num_threads
     options.extract_colors = False
-    models = pycolmap.incremental_mapping(database_path, image_dir, workdir / "models", options)
+    verification = pycolmap.TwoViewGeometryOptions()
+    models = []
+    for trial in range(mapping_trials):
+        seed = random_seed + trial if random_seed >= 0 else random_seed
+        database_path = workdir / f"database_{trial}.db"
+        write_database(
+            database_path,
+            names,
+            sizes,
+            keypoints,
+            matches,
+            share_intrinsics=share_intrinsics,
+        )
+        verification.ransac.random_seed = seed
+        pycolmap.verify_matches(database_path, pairs_path, verification)
+        options.random_seed = seed
+        models.extend(
+            pycolmap.incremental_mapping(database_path, image_dir, workdir / f"models_{trial}", options).values(),
+        )
     if not models:
         return rotations, translations
 
     # Маппер может разбить группу на несколько моделей, а кластеру сабмита соответствует одна поза на картинку.
-    model = max(models.values(), key=lambda reconstruction: reconstruction.num_reg_images())
+    model = max(models, key=lambda reconstruction: reconstruction.num_reg_images())
+    if mapping_trials > 1:
+        # Compare geometric support only among candidates with similar coverage.
+        min_registered = 0.95 * model.num_reg_images()
+        model = max(
+            (candidate for candidate in models if candidate.num_reg_images() >= min_registered),
+            key=lambda candidate: (
+                candidate.compute_num_observations() / (1.0 + candidate.compute_mean_reprojection_error())
+            ),
+        )
     index = {name: i for i, name in enumerate(names)}
     for image in model.images.values():
         if image.has_pose:
@@ -230,13 +292,19 @@ class Reconstructor:
         self.device = device
         self.extractor = ALIKED(max_num_keypoints=config.max_keypoints).eval().to(device)
         self.matcher = LightGlue(features="aliked").eval().to(device)
+        self.compact = GeometryConfig()
+        self.compact_extractor = (
+            ALIKED(max_num_keypoints=self.compact.max_keypoints).eval().to(device)
+            if config.compact_same_resolution
+            else None
+        )
 
     @torch.no_grad()
-    def _extract(self, paths: list[Path]) -> list[dict[str, torch.Tensor]]:
+    def _extract(self, paths: list[Path], extractor: ALIKED, resize: int) -> list[dict[str, torch.Tensor]]:
         features = []
         for path in tqdm(paths, desc="features", leave=False):
             image = load_image(path).to(self.device)
-            feats = self.extractor.extract(image, resize=self.config.resize)
+            feats = extractor.extract(image, resize=resize)
             features.append({key: value.cpu() for key, value in feats.items()})
         return features
 
@@ -277,11 +345,33 @@ class Reconstructor:
         image_dir = Path(os.path.commonpath([path.parent for path in paths]))
         names = [path.relative_to(image_dir).as_posix() for path in paths]
 
-        features = self._extract(paths)
-        matches = self._match(features, shortlist_pairs(embeddings, self.config.neighbors))
+        extractor, resize, neighbors = self.extractor, self.config.resize, self.config.neighbors
+        share_intrinsics = self.config.share_intrinsics
+        if self.compact_extractor is not None:
+            resolutions = set()
+            for path in paths:
+                with Image.open(path) as image:
+                    resolutions.add(image.size)
+            if len(resolutions) == 1:
+                extractor, resize, neighbors = self.compact_extractor, self.compact.resize, self.compact.neighbors
+                share_intrinsics = True
+
+        features = self._extract(paths, extractor, resize)
+        matches = self._match(features, shortlist_pairs(embeddings, neighbors))
         sizes = np.stack([feats["image_size"][0].numpy() for feats in features])
         # LightGlue считает от центра пикселя, COLMAP — от его угла.
         keypoints = [feats["keypoints"][0].numpy() + 0.5 for feats in features]
 
         with tempfile.TemporaryDirectory() as workdir:
-            return map_images(Path(workdir), image_dir, names, sizes, keypoints, matches, self.config.num_threads)
+            return map_images(
+                Path(workdir),
+                image_dir,
+                names,
+                sizes,
+                keypoints,
+                matches,
+                num_threads=self.config.num_threads,
+                share_intrinsics=share_intrinsics,
+                random_seed=self.config.random_seed,
+                mapping_trials=self.config.mapping_trials,
+            )

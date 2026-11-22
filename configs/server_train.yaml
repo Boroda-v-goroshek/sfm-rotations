@@ -1,0 +1,7 @@
+defaults:
+  - baseline_train
+  - _self_
+
+dvc_pull: false
+checkpoints: checkpoints/dinov2-large-${now:%Y-%m-%d_%H-%M-%S_%f}
+plots_dir: ${checkpoints}/plots

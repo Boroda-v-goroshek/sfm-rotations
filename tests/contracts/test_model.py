@@ -39,14 +39,10 @@ def test_baseline_outputs_convert_to_predictions(images: torch.Tensor):
     assert predictions.embeddings.shape == (3, 16)
 
 
-@pytest.mark.xfail(
-    reason="#6: у модели нет predict() -> Predictions, 6D протекает в train.py",
-    raises=AttributeError,
-)
 @pytest.mark.usefixtures("tiny_backbone")
 def test_model_returns_predictions(images: torch.Tensor):
     model = SfMModel(embedding_dim=16).eval()
-    predictions = model.predict(images)  # type: ignore[attr-defined]
+    predictions = model.predict(images)
     assert isinstance(predictions, Predictions)
     predictions.validate()
 

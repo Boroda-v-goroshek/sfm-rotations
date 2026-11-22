@@ -1,14 +1,12 @@
 data_root: data
 test_dir: data/test
+# Модель (backbone, image_size, pooling) и кластеризация (cluster_distance, linkage, min_cluster_size)
+# берутся из чекпоинта.
 checkpoint: checkpoints/baseline/best.pt
-backbone: facebook/dinov2-base
-embedding_dim: 256
 output_path: submission.csv
 metrics_path: geometry_metrics.json
 batch_size: 32
 num_workers: 0
-cluster_distance: 0.3
-min_cluster_size: 3
 dvc_pull: true
 
 geometry:
@@ -17,3 +15,7 @@ geometry:
   resize: 1024
   min_matches: 15
   num_threads: -1
+  share_intrinsics: false
+  random_seed: -1
+  mapping_trials: 1
+  compact_same_resolution: false
