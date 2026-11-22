@@ -2,15 +2,15 @@ defaults:
   - main
   - _self_
 
-output_path: results/${now:%Y-%m-%d_%H-%M-%S}/baseline.csv
+output_path: results/${now:%Y-%m-%d_%H-%M-%S}/baseline.csv  # Шаблон имени выходных CSV для быстрого инференса
 
 geometry:
-  neighbors: 20
-  max_keypoints: 2048
-  resize: 1024
-  min_matches: 15
-  num_threads: -1
-  share_intrinsics: false
-  random_seed: -1
-  mapping_trials: 1
-  compact_same_resolution: false
+  neighbors: 20  # Количество ближайших соседей по сходству эмбеддингов для сопоставления
+  max_keypoints: 2048  # Максимальное число ключевых точек ALIKED на кадр
+  resize: 1024  # Размер большей стороны изображения при извлечении локальных признаков
+  min_matches: 15  # Минимальное число верифицированных совпадений для триангуляции пары
+  num_threads: -1  # Число потоков CPU для сопоставления и маппинга (-1: все доступные ядра)
+  share_intrinsics: false  # Предполагать общие внутренние параметры камеры для одинакового разрешения
+  random_seed: -1  # Random seed для RANSAC/COLMAP (-1: недетерминированный)
+  mapping_trials: 1  # Количество попыток маппинга COLMAP с разных начальных пар
+  compact_same_resolution: false  # Использовать компактный экстрактор при одинаковом разрешении

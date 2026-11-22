@@ -1,42 +1,45 @@
-data_root: data
-checkpoints: checkpoints/dinov2-large-${now:%Y-%m-%d_%H-%M-%S_%f}
-plots_dir: ${checkpoints}/plots
+# Пути к данным и артефактам
+data_root: data  # Корневая папка с данными (содержит train/ и train_labels.csv)
+checkpoints: checkpoints/dinov2-large-${now:%Y-%m-%d_%H-%M-%S_%f}  # Директория для сохранения весов и метрик
+plots_dir: ${checkpoints}/plots  # Директория для сохранения графиков (loss, imc_score, rot_maa)
 
-# Модель. Эмбеддинг сцены = [CLS, mean(patch)] DINOv2-large без проекции: на ~30 сценах
-# случайная голова и полностью размороженный бэкбон переобучаются и обобщаются хуже предобученного.
-backbone: facebook/dinov2-large
-image_size: 448
-pooling: cls+mean
-embedding_dim: 0
-train_blocks: 2
-freeze_backbone: false
+# Архитектура модели:
+backbone: facebook/dinov2-large  # Предобученный Vision Transformer из HuggingFace
+image_size: 448  # Размер стороны квадратного входного изображения в пикселях
+pooling: cls+mean  # Метод агрегации: конкатенация [CLS] токена и усреднения patch-токенов
+embedding_dim: 0  # Размерность проекционной головы (0 — без проекции, сырой выход DINOv2)
+train_blocks: 2  # Количество последних блоков трансформера, размораживаемых для обучения
+freeze_backbone: false  # Полная заморозка бэкбона (false — обучаются train_blocks)
 
-epochs: 10
-lr: 3e-06
-lr_head: 1e-03
-weight_decay: 0.05
-warmup_fraction: 0.1
-temperature: 0.1
-loss_weights: [1.0, 0.0, 0.0]
-eval_pretrained: true
+# Параметры оптимизации:
+epochs: 10  # Количество эпох обучения
+lr: 3e-06  # Скорость обучения (learning rate) для блоков бэкбона
+lr_head: 1e-03  # Скорость обучения для проекционных голов (если используются)
+weight_decay: 0.05  # Коэффициент L2-регуляризации (AdamW)
+warmup_fraction: 0.1  # Доля шагов обучения, отведённая на линейный разогрев (warmup)
+temperature: 0.1  # Температура для Supervised Contrastive loss
+loss_weights: [1.0, 0.0, 0.0]  # Веса компонентов лосса: [contrastive, rotation, translation]
+eval_pretrained: true  # Оценивать предобученную модель на эпохе 0 перед обучением
 
-val_fraction: 0.2
-num_workers: 8
-seed: 42
-batch_size: 56
-clusters_per_batch: 7
-outlier_fraction: 0.125
-val_batch_size: 16
-val_clusters_per_batch: 3
-val_outlier_fraction: 0.25
-eval_batch_size: 32
+# Сэмплирование данных и валидация:
+val_fraction: 0.2  # Доля сцен, выделяемая для валидационного сплита
+num_workers: 8  # Количество процессов DataLoader для фоновой загрузки данных
+seed: 42  # Seed генератора случайных чисел для воспроизводимости
+batch_size: 56  # Суммарный размер обучающего батча
+clusters_per_batch: 7  # Число различных сцен/кластеров в обучающем батче
+outlier_fraction: 0.125  # Доля изображений-выбросов (outliers) в обучающем батче
+val_batch_size: 16  # Суммарный размер валидационного батча
+val_clusters_per_batch: 3  # Число сцен в валидационном батче
+val_outlier_fraction: 0.25  # Доля выбросов в валидационном батче
+eval_batch_size: 32  # Размер батча при извлечении эмбеддингов для оценки метрик
 
-# Кластеризация (попадает в чекпоинт, инференс берёт её оттуда).
-cluster_distance: 0.225
-linkage: single
-min_cluster_size: 3
+# Кластеризация (сохраняется в чекпоинт, инференс считывает параметры оттуда):
+cluster_distance: 0.225  # Порог косинусного расстояния для разделения кластеров
+linkage: single  # Метод связывания: single-linkage (сцены образуют цепочки перекрытий)
+min_cluster_size: 3  # Минимальный размер кластера; меньшие группы помечаются выбросами
 
-dvc_pull: false
-logging: true
-mlflow_tracking_uri: ${oc.env:MLFLOW_TRACKING_URI,http://127.0.0.1:8080}
-mlflow_experiment_name: sfm-rotations
+# Инфраструктура и логирование:
+dvc_pull: false  # Автоматически скачивать данные через DVC перед стартом
+logging: true  # Включить логирование метрик и артефактов в MLflow
+mlflow_tracking_uri: ${oc.env:MLFLOW_TRACKING_URI,http://127.0.0.1:8080}  # URL сервера MLflow
+mlflow_experiment_name: sfm-rotations  # Имя эксперимента в MLflow

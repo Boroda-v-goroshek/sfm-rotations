@@ -2,13 +2,13 @@ defaults:
   - main
   - _self_
 
-checkpoint: checkpoints/dinov2-large/best.pt
+checkpoint: checkpoints/dinov2-large/best.pt  # Чекпоинт DINOv2-large для оценки в высоком качестве
 
 geometry:
-  neighbors: 40
-  max_keypoints: 3072
-  resize: 1280
-  min_matches: 15
-  num_threads: 1
-  random_seed: 42
-  compact_same_resolution: true
+  neighbors: 40  # Увеличенное число соседей для более плотного графа сопоставления
+  max_keypoints: 3072  # Увеличенное число ключевых точек ALIKED для мелких деталей
+  resize: 1280  # Повышенное разрешение кадров при детекции признаков
+  min_matches: 15  # Минимальное число подтверждённых совпадений для соединения в граф
+  num_threads: 1  # 1 поток для строгой детерминированности реконструкции
+  random_seed: 42  # Фиксированный seed для воспроизводимости геометрии
+  compact_same_resolution: true  # Оптимизация для кадров одинакового разрешения
