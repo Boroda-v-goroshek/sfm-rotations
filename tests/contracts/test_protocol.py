@@ -57,7 +57,7 @@ def test_val_split_entries_exist(val_split: ValSplit, real_data_root: Path):
 
 
 def test_val_split_matches_baseline_split(protocol: Protocol, val_split: ValSplit, real_data_root: Path):
-    """Пока train.py считает сплит сам (расхождение #5), он обязан совпадать с замороженным."""
+    """Функция сплита обязана воспроизводить замороженный сплит (из него train.py берёт валидацию)."""
     df = load_labels(real_data_root)
     train_indices, val_indices = train_val_split_by_cluster(
         df["scene_label"].tolist(),

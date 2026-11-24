@@ -1,0 +1,12 @@
+# Основная конфигурация инференса
+data_root: data  # Корневая папка с данными проекта
+test_dir: data/test/stairs  # Путь к тестовым изображениям (одна сцена или набор папок со сценами)
+
+# Модель (backbone, image_size, pooling) и кластеризация (cluster_distance, linkage, min_cluster_size)
+# берутся напрямую из чекпоинта:
+checkpoint: checkpoints/baseline/best.pt  # Путь к чекпоинту обученной модели
+
+output_path: results/${now:%Y-%m-%d_%H-%M-%S}/submission.csv  # Шаблон пути сохранения выходных CSV
+batch_size: 32  # Размер батча при извлечении эмбеддингов
+num_workers: 0  # Количество воркеров DataLoader для чтения картинок
+dvc_pull: false  # Автоматически скачивать тестовые данные через DVC (--dvc-pull для включения)

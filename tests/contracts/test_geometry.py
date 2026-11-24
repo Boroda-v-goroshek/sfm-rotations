@@ -51,7 +51,14 @@ def _scene(rng: np.random.Generator, n_images: int) -> dict:
     }
 
 
-def _map(scene: dict, tmp_path: Path, matches: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
+def _map(
+    scene: dict,
+    tmp_path: Path,
+    matches: dict | None = None,
+    *,
+    share_intrinsics: bool = False,
+    mapping_trials: int = 1,
+) -> tuple[np.ndarray, np.ndarray]:
     return map_images(
         tmp_path,
         tmp_path,
@@ -60,12 +67,21 @@ def _map(scene: dict, tmp_path: Path, matches: dict | None = None) -> tuple[np.n
         scene["keypoints"],
         scene["matches"] if matches is None else matches,
         num_threads=1,
+        share_intrinsics=share_intrinsics,
+        mapping_trials=mapping_trials,
+        random_seed=42,
     )
 
 
-def test_map_images_recovers_poses(tmp_path: Path, rng: np.random.Generator):
+@pytest.mark.parametrize(("share_intrinsics", "mapping_trials"), [(False, 1), (True, 1), (False, 2)])
+def test_map_images_recovers_poses(
+    tmp_path: Path,
+    rng: np.random.Generator,
+    share_intrinsics: bool,
+    mapping_trials: int,
+):
     scene = _scene(rng, n_images=6)
-    rotations, translations = _map(scene, tmp_path)
+    rotations, translations = _map(scene, tmp_path, share_intrinsics=share_intrinsics, mapping_trials=mapping_trials)
 
     assert np.isfinite(rotations).all()
     assert is_rotation(rotations).all()

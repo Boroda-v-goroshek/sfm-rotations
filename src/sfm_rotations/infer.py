@@ -41,44 +41,65 @@ class InferenceDataset(Dataset):
         return self.transform(image) if self.transform else image
 
 
-def load_model(cfg: DictConfig, device: str) -> SfMModel:
+def load_model(cfg: DictConfig, device: str) -> tuple[SfMModel, dict]:
     """
-    Build the model and load the checkpoint.
+    Rebuild the model from the checkpoint and load its weights.
 
     Parameters
     ----------
     cfg:
-        Inference config.
+        Inference config (only cfg.checkpoint is used).
 
     device:
         Torch device.
 
     Returns
     -------
-    model in eval mode
+    model in eval mode, checkpoint (model_config, postprocess, ...)
 
     """
     checkpoint_path = Path(cfg.checkpoint)
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Нет чекпоинта {checkpoint_path}")
 
-    model = SfMModel(
-        backbone_name=cfg.backbone,
-        embedding_dim=cfg.embedding_dim,
-        freeze_backbone=False,
-    ).to(device)
-
     print(f"Loading checkpoint from {checkpoint_path}...")
-    # weights_only=False: чекпоинт сохранён train.py этого же репозитория и лежит
-    # в доверенном DVC-remote; в метаданных обучения — numpy-скаляры и dtype'ы,
-    # которые weights_only-режим torch>=2.6 по умолчанию отвергает.
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint.get("model", checkpoint))
-    return model.eval()
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    except Exception:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+    if "model_config" not in checkpoint:
+        alt_path = Path("checkpoints/dinov2-large/best.pt")
+        if alt_path.exists():
+            print(
+                f"Внимание: в {checkpoint_path} нет 'model_config' (старый формат). "
+                f"Загружаем актуальный чекпоинт из {alt_path}.",
+            )
+            checkpoint = torch.load(alt_path, map_location="cpu")
+        else:
+            raise KeyError(
+                f"В чекпоинте {checkpoint_path} отсутствует 'model_config'. "
+                "Укажите актуальный чекпоинт (например, checkpoint=checkpoints/dinov2-large/best.pt).",
+            )
+
+    model_config = checkpoint["model_config"]
+    model = SfMModel(
+        backbone_name=model_config["backbone"],
+        embedding_dim=model_config["embedding_dim"],
+        pooling=model_config.get("pooling", "cls"),
+    )
+    model.load_state_dict(checkpoint["model"])
+    return model.to(device).eval(), checkpoint
 
 
 @torch.no_grad()
-def compute_embeddings(model: SfMModel, image_paths: list[Path], cfg: DictConfig, device: str) -> np.ndarray:
+def compute_embeddings(
+    model: SfMModel,
+    image_paths: list[Path],
+    image_size: int,
+    cfg: DictConfig,
+    device: str,
+) -> np.ndarray:
     """
     Compute L2-normalized scene embeddings.
 
@@ -89,6 +110,9 @@ def compute_embeddings(model: SfMModel, image_paths: list[Path], cfg: DictConfig
 
     image_paths:
         Image files [N].
+
+    image_size:
+        Input side the model was trained with (checkpoint model_config).
 
     cfg:
         Inference config.
@@ -101,14 +125,16 @@ def compute_embeddings(model: SfMModel, image_paths: list[Path], cfg: DictConfig
     embeddings [N, D]
 
     """
-    _, val_transform = build_transforms()
+    _, val_transform = build_transforms(image_size)
     loader = DataLoader(
         InferenceDataset(image_paths, transform=val_transform),
         batch_size=cfg.batch_size,
         shuffle=False,
         num_workers=cfg.num_workers,
     )
-    embeddings = [model(images.to(device))[0].float().cpu() for images in tqdm(loader, desc="embeddings")]
+    embeddings = []
+    for images in tqdm(loader, desc="embeddings"):
+        embeddings.append(torch.from_numpy(model.predict(images.to(device)).embeddings))
     return F.normalize(torch.cat(embeddings), dim=1).numpy()
 
 
@@ -118,6 +144,7 @@ def reconstruct_dataset(
     reconstructor: Reconstructor,
     distance_threshold: float,
     min_cluster_size: int,
+    linkage: str = "average",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Cluster the images of one dataset and reconstruct every cluster.
@@ -139,12 +166,15 @@ def reconstruct_dataset(
     min_cluster_size:
         Clusters smaller than this are treated as outliers.
 
+    linkage:
+        Linkage of the agglomerative clustering.
+
     Returns
     -------
     cluster id [N], rotations [N, 3, 3], translations [N, 3]; poses are NaN where not registered
 
     """
-    clusters = cluster_embeddings(embeddings, distance_threshold, min_cluster_size)
+    clusters = cluster_embeddings(embeddings, distance_threshold, min_cluster_size, linkage)
     rotations = np.full((len(image_paths), 3, 3), np.nan)
     translations = np.full((len(image_paths), 3), np.nan)
 
@@ -179,7 +209,7 @@ def _format_vector(values: np.ndarray) -> str:
     return VALUE_SEPARATOR.join("nan" if np.isnan(value) else f"{value:.9f}" for value in values.ravel())
 
 
-@hydra.main(version_base=None, config_path="../../configs", config_name="baseline_infer")
+@hydra.main(version_base=None, config_path="../../configs/inference", config_name="fast")
 def main(cfg: DictConfig) -> None:
     """Predict scene clusters and camera poses for test images and write submission.csv."""
     data_root = Path(cfg.data_root)
@@ -200,39 +230,77 @@ def main(cfg: DictConfig) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Inference device: {device}")
 
-    model = load_model(cfg, device)
-    embeddings = compute_embeddings(model, image_paths, cfg, device)
+    model, checkpoint = load_model(cfg, device)
+    postprocess = checkpoint["postprocess"]
     reconstructor = build_reconstructor(cfg, device)
+    image_size = checkpoint["model_config"]["image_size"]
 
-    # Сцены кластеризуются внутри датасета: так считает метрика соревнования.
-    datasets = np.array([path.relative_to(test_dir).parts[0] for path in image_paths])
-    rows = []
-    for dataset in tqdm(np.unique(datasets), desc="datasets"):
-        indices = np.flatnonzero(datasets == dataset)
-        paths = [image_paths[i] for i in indices]
+    # Группируем картинки по сценам/папкам:
+    # 1. Если передана директория со сценами (data/test/<scene>/<image>)
+    # 2. Если передана отдельная сцена (data/test/stairs/<image>)
+    scene_images: dict[str, list[tuple[Path, str]]] = {}
+    for path in image_paths:
+        relative_parts = path.relative_to(test_dir).parts
+        if len(relative_parts) > 1:
+            scene_name = relative_parts[0]
+            image_name = path.relative_to(test_dir / relative_parts[0]).as_posix()
+        else:
+            scene_name = test_dir.name
+            image_name = path.name
+        scene_images.setdefault(scene_name, []).append((path, image_name))
+
+    output_path = Path(cfg.output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    for scene_name, image_info in scene_images.items():
+        paths = [image_path for image_path, _ in image_info]
+        names = [rel_name for _, rel_name in image_info]
+
+        print(f"\n--- Running inference for scene '{scene_name}' ({len(paths)} images) ---")
+        embeddings = compute_embeddings(model, paths, image_size, cfg, device)
         clusters, rotations, translations = reconstruct_dataset(
             paths,
-            embeddings[indices],
+            embeddings,
             reconstructor,
-            cfg.cluster_distance,
-            cfg.min_cluster_size,
+            postprocess["cluster_distance"],
+            postprocess["min_cluster_size"],
+            postprocess.get("linkage", "average"),
         )
-        for path, cluster, rotation, translation in zip(paths, clusters, rotations, translations, strict=True):
-            rows.append(
+
+        scene_rows = []
+        for image_name, cluster, rotation, translation in zip(
+            names,
+            clusters,
+            rotations,
+            translations,
+            strict=True,
+        ):
+            scene_rows.append(
                 {
-                    "dataset": dataset,
+                    "dataset": scene_name,
                     "scene": OUTLIER_SCENE if cluster == OUTLIER_LABEL else f"cluster{cluster}",
-                    "image": path.relative_to(test_dir / dataset).as_posix(),
+                    "image": image_name,
                     "rotation_matrix": _format_vector(rotation),
                     "translation_vector": _format_vector(translation),
                 },
             )
 
-    output_path = Path(cfg.output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows, columns=list(SUBMISSION_COLUMNS)).to_csv(output_path, index=False)
-    print(f"Inference completed! Saved {len(rows)} predictions to {output_path}")
+        # Сохраняем отдельный CSV-файл для сцены: <output_stem>_<scene_name>.csv
+        scene_csv_path = output_path.parent / f"{output_path.stem}_{scene_name}{output_path.suffix}"
+        pd.DataFrame(scene_rows, columns=list(SUBMISSION_COLUMNS)).to_csv(scene_csv_path, index=False)
+        print(f"Saved {len(scene_rows)} predictions for '{scene_name}' to {scene_csv_path}")
+
+    print("\nInference completed!")
 
 
 if __name__ == "__main__":
+    import sys
+
+    # Support convenience flags from CLI: --dvc-pull, --no-dvc, --no-dvc-pull
+    sys.argv = [
+        arg.replace("--dvc-pull", "dvc_pull=true")
+        .replace("--no-dvc-pull", "dvc_pull=false")
+        .replace("--no-dvc", "dvc_pull=false")
+        for arg in sys.argv
+    ]
     main()

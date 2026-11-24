@@ -122,6 +122,7 @@ def compute_losses(
     rotations_6d: torch.Tensor,
     labels: dict[str, torch.Tensor],
     loss_weights: tuple[float, float, float],
+    temperature: float = 0.07,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     Weighted sum of contrastive, rotation and translation losses.
@@ -145,6 +146,9 @@ def compute_losses(
     loss_weights:
         Weights of contrastive, rotation and translation losses.
 
+    temperature:
+        SupCon temperature.
+
     Returns
     -------
     total_loss, dict with float values of each loss component
@@ -153,7 +157,7 @@ def compute_losses(
     scene_labels = labels["scene_label"]
     has_pose = scene_labels != OUTLIER_LABEL
 
-    contrastive = supervised_contrastive_loss(embeddings, scene_labels)
+    contrastive = supervised_contrastive_loss(embeddings, scene_labels, temperature=temperature)
     if has_pose.any():
         rotations = rotation_6d_to_matrix(rotations_6d[has_pose])
         rotation = rotation_geodesic_loss(rotations, labels["rotation_matrix"][has_pose])

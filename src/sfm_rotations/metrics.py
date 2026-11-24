@@ -244,6 +244,7 @@ def cluster_embeddings(
     embeddings: np.ndarray,
     distance_threshold: float,
     min_cluster_size: int,
+    linkage: str = "average",
 ) -> np.ndarray:
     """
     Agglomerative clustering of embeddings by cosine distance.
@@ -261,6 +262,11 @@ def cluster_embeddings(
     min_cluster_size:
         Minimum size of a non-outlier cluster.
 
+    linkage:
+        "average", "single" or "complete". Single linkage suits SfM scenes: views of one
+        scene form a chain of overlapping neighbours, while the two ends of the chain
+        may look nothing alike.
+
     Returns
     -------
     cluster id per image [N], OUTLIER_LABEL for outliers
@@ -272,7 +278,7 @@ def cluster_embeddings(
     clusterer = AgglomerativeClustering(
         n_clusters=None,  # type: ignore[arg-type]
         metric="cosine",
-        linkage="average",
+        linkage=linkage,
         distance_threshold=distance_threshold,
     )
     predicted = clusterer.fit_predict(embeddings)
@@ -483,6 +489,7 @@ def compute_all_metrics(
     thresholds: dict[tuple[str, str], np.ndarray],
     distance_threshold: float = 0.3,
     min_cluster_size: int = 3,
+    linkage: str = "average",
 ) -> dict[str, float]:
     """
     Cluster embeddings within each dataset and compute all metrics.
@@ -501,6 +508,9 @@ def compute_all_metrics(
     min_cluster_size:
         Clusters smaller than this are treated as outliers.
 
+    linkage:
+        Linkage of the agglomerative clustering.
+
     Returns
     -------
     dict with pose/*, emb/* and imc/* metrics
@@ -510,7 +520,7 @@ def compute_all_metrics(
     embeddings = _normalize(outputs.embeddings)
     for dataset in np.unique(outputs.datasets):
         idx = np.flatnonzero(outputs.datasets == dataset)
-        predicted_clusters[idx] = cluster_embeddings(embeddings[idx], distance_threshold, min_cluster_size)
+        predicted_clusters[idx] = cluster_embeddings(embeddings[idx], distance_threshold, min_cluster_size, linkage)
 
     metrics = {
         **pose_metrics(outputs),
