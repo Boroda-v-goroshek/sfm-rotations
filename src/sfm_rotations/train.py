@@ -39,8 +39,6 @@ from sfm_rotations.metrics import load_thresholds
 from sfm_rotations.metrics import pose_metrics
 from sfm_rotations.model import SfMModel
 
-load_dotenv()
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -522,6 +520,9 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     import sys
+
+    # .env читаем до Hydra: ${oc.env:MLFLOW_TRACKING_URI} резолвится при загрузке конфига.
+    load_dotenv()
 
     # Support convenience flags from CLI: --no-logging, --no-mlflow, --dvc-pull, --no-dvc, --no-dvc-pull
     sys.argv = [

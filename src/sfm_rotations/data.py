@@ -18,6 +18,9 @@ from sfm_rotations.contracts import OUTLIER_SCENE
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
+# Расширения, которые пайплайн считает изображениями (infer.py и CLI reconstruct).
+IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg"})
+
 
 def load_labels(data_root: Path) -> pd.DataFrame:
     """

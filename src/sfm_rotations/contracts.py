@@ -48,6 +48,10 @@ LABELS_COLUMNS = ("dataset", "scene", "image", "rotation_matrix", "translation_v
 THRESHOLDS_COLUMNS = ("dataset", "scene", "thresholds")
 SUBMISSION_COLUMNS = ("dataset", "scene", "image", "rotation_matrix", "translation_vector")
 
+# Схема JSON-результата CLI `reconstruct` (sfm_rotations.pipeline.build_result):
+# version растёт при любом ломающем изменении структуры.
+RESULT_SCHEMA = 1
+
 # Ключи, которые обязан содержать metrics_epochNNN.json и checkpoint["metrics"].
 REQUIRED_METRIC_KEYS = (
     "epoch",

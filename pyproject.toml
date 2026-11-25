@@ -21,12 +21,16 @@ dependencies = [
   "scikit-learn",
   "dvc[ssh]",
   "hydra-core",
+  "click>=8.1",
   "mlflow>=3.1",
   "matplotlib",
   "python-dotenv",
   "pycolmap>=4.2.1",
   "lightglue",
 ]
+
+[project.scripts]
+reconstruct = "sfm_rotations.cli:run_console"
 
 [dependency-groups]
 dev = [

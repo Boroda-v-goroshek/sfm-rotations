@@ -226,3 +226,8 @@ image-matching-challenge-2025
 outputs/
 multirun/
 results/
+
+# Выходы reconstruct CLI (result.json + его этапный кэш)
+result.json
+result.json.cache/
+*.json.cache/

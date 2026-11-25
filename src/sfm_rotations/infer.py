@@ -17,6 +17,7 @@ from sfm_rotations.contracts import OUTLIER_LABEL
 from sfm_rotations.contracts import OUTLIER_SCENE
 from sfm_rotations.contracts import SUBMISSION_COLUMNS
 from sfm_rotations.contracts import VALUE_SEPARATOR
+from sfm_rotations.data import IMAGE_EXTENSIONS
 from sfm_rotations.data import build_transforms
 from sfm_rotations.dvc_utils import pull_dvc_data
 from sfm_rotations.geometry import GeometryConfig
@@ -220,8 +221,7 @@ def main(cfg: DictConfig) -> None:
             required_paths=[test_dir],
         )
 
-    image_extensions = {".png", ".jpg", ".jpeg"}
-    image_paths = sorted(path for path in test_dir.rglob("*") if path.suffix.lower() in image_extensions)
+    image_paths = sorted(p for p in test_dir.rglob("*") if p.suffix.lower() in IMAGE_EXTENSIONS)
     if not image_paths:
         print(f"No test images found in {test_dir}!")
         return
