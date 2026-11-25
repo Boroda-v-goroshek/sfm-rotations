@@ -312,10 +312,10 @@ hydra-инференсе, остальное — из дефолтов CLI.
 
 ```bash
 uv sync --all-groups && source .venv/bin/activate
-dvc pull checkpoints/dinov2-large.dvc    # веса модели, см. «Работа с DVC»
+dvc pull checkpoints/dinov2-large.dvc # веса модели, см. «Работа с DVC»
 
 reconstruct --input-dir data/test --output result.json \
-    --checkpoint checkpoints/dinov2-large/best.pt --num-threads 1
+	--checkpoint checkpoints/dinov2-large/best.pt --num-threads 1
 ```
 
 Прервали прогон (Ctrl+C)? Повторите ту же команду с `--resume` — продолжит с последнего
