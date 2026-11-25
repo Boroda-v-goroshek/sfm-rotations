@@ -603,11 +603,14 @@ def _reconstruct_cluster(
     if resume and cache_path.is_file():
         try:
             payload = _json_load(cache_path)
-            cached_ok = payload.get("fingerprint") == fingerprint and payload.get("cluster_images") == local_prefixes
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("cluster %s/%s: повреждённый кэш (%s), пересчитываем", name, cluster, e)
-            cached_ok = False
-        if cached_ok:
+            payload = None
+        if (
+            isinstance(payload, dict)
+            and payload.get("fingerprint") == fingerprint
+            and payload.get("cluster_images") == local_prefixes
+        ):
             rotations[indices] = np.array(payload["rotations"], dtype=float)
             translations[indices] = np.array(payload["translations"], dtype=float)
             logger.info("stage poses: cached cluster %s/%s (%d images)", name, cluster, len(indices))
@@ -750,7 +753,13 @@ def run(cfg: dict[str, Any], resume: bool) -> dict[str, Any]:
     embeddings = _stage_embeddings(cache_dir, all_paths, resume, device, compute)
     clusters = _stage_clusters(cache_dir, datasets, embeddings, cfg, resume)
     rotations, translations, errors = _stage_poses(
-        cache_dir, datasets, clusters, embeddings, fingerprint, resume, get_reconstructor
+        cache_dir,
+        datasets,
+        clusters,
+        embeddings,
+        fingerprint,
+        resume,
+        get_reconstructor,
     )
 
     meta = {
