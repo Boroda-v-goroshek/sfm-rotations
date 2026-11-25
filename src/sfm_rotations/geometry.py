@@ -11,15 +11,9 @@ groups images into clusters, and each cluster is reconstructed geometrically:
 Images the mapper does not register get NaN poses.
 """
 
-import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-
-# torch и pycolmap statically линкуют каждый свой libomp; на macOS их двойная
-# загрузка валит процесс (OMP Error #15). pycolmap тянется вместе с этим модулем
-# в любом CLI-прогоне, поэтому allowlist ставим заранее.
-os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import numpy as np
 import pycolmap

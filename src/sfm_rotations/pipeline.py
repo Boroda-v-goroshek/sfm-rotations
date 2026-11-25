@@ -42,6 +42,13 @@ CACHE_EMBEDDINGS_NAME = "embeddings.npz"
 CACHE_CLUSTERS_NAME = "clusters.json"
 CACHE_CLUSTER_PREFIX = "cluster-"
 
+# Фолбэки кластеризации, если их нет ни во флагах, ни в checkpoint['postprocess']
+# (старые чекпоинты до model_config-era). Совпадают с дефолтами configs/train.
+DEFAULT_CLUSTER_DISTANCE = 0.3
+DEFAULT_MIN_CLUSTER_SIZE = 3
+DEFAULT_LINKAGE = "average"
+DEFAULT_IMAGE_SIZE = 224
+
 
 def load_checkpoint_meta(checkpoint_path: str | Path) -> dict[str, Any]:
     """
@@ -99,8 +106,12 @@ def resolve_model_params(cfg: dict[str, Any]) -> dict[str, Any]:
 
     resolved["backbone"] = model_config["backbone"]
     resolved["embedding_dim"] = model_config["embedding_dim"]
-    resolved["image_size"] = model_config.get("image_size", 224)
-    for key, fallback in (("cluster_distance", 0.3), ("min_cluster_size", 3), ("linkage", "average")):
+    resolved["image_size"] = model_config.get("image_size", DEFAULT_IMAGE_SIZE)
+    for key, fallback in (
+        ("cluster_distance", DEFAULT_CLUSTER_DISTANCE),
+        ("min_cluster_size", DEFAULT_MIN_CLUSTER_SIZE),
+        ("linkage", DEFAULT_LINKAGE),
+    ):
         if resolved.get(key) is None:
             resolved[key] = postprocess.get(key, fallback)
     resolved["_checkpoint_meta"] = meta
@@ -183,13 +194,13 @@ def discover_images(input_dir: Path, extensions: set[str]) -> dict[str, dict[str
 
 
 def _json_dump(path: Path, payload: Any) -> None:
-    with open(path, "w") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
+    with open(path, "w") as json_file:
+        json.dump(payload, json_file, indent=2, ensure_ascii=False)
 
 
 def _json_load(path: Path) -> Any:
-    with open(path) as f:
-        return json.load(f)
+    with open(path) as json_file:
+        return json.load(json_file)
 
 
 def _npz_get(path: Path, key: str) -> np.ndarray:
@@ -603,8 +614,8 @@ def _reconstruct_cluster(
     if resume and cache_path.is_file():
         try:
             payload = _json_load(cache_path)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("cluster %s/%s: повреждённый кэш (%s), пересчитываем", name, cluster, e)
+        except (json.JSONDecodeError, OSError) as error:
+            logger.warning("cluster %s/%s: повреждённый кэш (%s), пересчитываем", name, cluster, error)
             payload = None
         if (
             isinstance(payload, dict)
@@ -621,9 +632,9 @@ def _reconstruct_cluster(
     logger.info("stage poses: reconstructing cluster %s/%s (%d images)", name, cluster, len(indices))
     try:
         rotation, translation = get_reconstructor().reconstruct(cluster_paths, embeddings[indices])
-    except Exception as e:  # noqa: BLE001 — один плохой кластер не роняет весь прогон
-        logger.warning("cluster %s/%s failed: %s (позы остались NaN)", name, cluster, e)
-        return f"{type(e).__name__}: {e}"
+    except Exception as error:  # noqa: BLE001 — один плохой кластер не роняет весь прогон
+        logger.warning("cluster %s/%s failed: %s (позы остались NaN)", name, cluster, error)
+        return f"{type(error).__name__}: {error}"
     rotations[indices] = rotation
     translations[indices] = translation
     _json_dump(
@@ -787,6 +798,6 @@ def write_json(result: dict[str, Any], path: Path) -> None:
     """Atomically write the result JSON (tmp + replace), creating parent folders."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w") as f:
-        json.dump(result, f, indent=2, ensure_ascii=False, allow_nan=False)
+    with open(tmp, "w") as json_file:
+        json.dump(result, json_file, indent=2, ensure_ascii=False, allow_nan=False)
     tmp.replace(path)

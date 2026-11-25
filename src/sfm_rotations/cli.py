@@ -9,12 +9,12 @@ Exit codes: 0 ok (per-cluster geometry failures are reported in meta.errors),
 2 usage/cache error, 1 unexpected failure.
 """
 
-import argparse
 import logging
 import sys
 from pathlib import Path
 from typing import Any
 
+import click
 from omegaconf import OmegaConf
 
 from sfm_rotations import __version__
@@ -30,95 +30,14 @@ logger = logging.getLogger("reconstruct")
 # кластеризации берутся из самого чекпоинта (model_config/postprocess), как в infer.py;
 # --config опционален и нужен, чтобы задать свои дефолты geometry/batch.
 DEFAULT_CHECKPOINT = "checkpoints/baseline/best.pt"
+DEFAULT_BATCH_SIZE = 32
+DEFAULT_NUM_WORKERS = 0
+
+# Явные флаги, чьи значения перебивают --config; остальные опции — только из --config.
+_GEOMETRY_FLAGS = ("neighbors", "max_keypoints", "resize", "min_matches", "num_threads")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """
-    Argument parser of the reconstruct CLI.
-
-    Returns
-    -------
-    parser
-
-    """
-    parser = argparse.ArgumentParser(
-        prog="reconstruct",
-        description="Сгруппировать изображения по сценам и восстановить позы камер; результат — JSON.",
-    )
-    parser.add_argument(
-        "--input-dir",
-        action="append",
-        required=True,
-        metavar="DIR",
-        help="папка с изображениями; подпапки = датасеты (как data/test), картинки в корне "
-        "= один датасет с именем папки; можно передавать несколько раз",
-    )
-    parser.add_argument("--output", required=True, metavar="FILE", help="куда записать итоговый JSON")
-    parser.add_argument(
-        "--config",
-        default=None,
-        metavar="YAML",
-        help="yaml с дефолтами geometry/batch (параметры модели и кластеризации берутся из --checkpoint)",
-    )
-    parser.add_argument(
-        "--checkpoint",
-        default=None,
-        metavar="PT",
-        help=f"чекпоинт модели (default: {DEFAULT_CHECKPOINT})",
-    )
-    parser.add_argument(
-        "--cache-dir",
-        default=None,
-        metavar="DIR",
-        help="папка промежуточных результатов (default: <output>.cache)",
-    )
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="продолжить с последнего этапа из кэша, а не пересчитывать всё",
-    )
-    parser.add_argument(
-        "--output-csv",
-        default=None,
-        metavar="CSV",
-        help="дополнительно записать submission.csv соревнования (format infer.py)",
-    )
-    parser.add_argument("--device", default=None, help="cuda / cpu (default: cuda если есть)")
-    parser.add_argument("--batch-size", type=int, default=None, help="батч DINOv2-эмбеддингов")
-    parser.add_argument("--num-workers", type=int, default=None, help="воркеры DataLoader эмбеддингов")
-    parser.add_argument(
-        "--cluster-distance",
-        type=float,
-        default=None,
-        help="порог косинусного расстояния кластеризации",
-    )
-    parser.add_argument("--min-cluster-size", type=int, default=None, help="кластеры меньше — выбросы")
-    parser.add_argument(
-        "--linkage",
-        default=None,
-        help="связывание агломеративной кластеризации (default: из чекпоинта)",
-    )
-    parser.add_argument(
-        "--neighbors",
-        type=int,
-        default=None,
-        help="число ближайших картинок по эмбеддингу для матчинга",
-    )
-    parser.add_argument("--max-keypoints", type=int, default=None, help="максимум ALIKED-ключей на картинку")
-    parser.add_argument("--resize", type=int, default=None, help="длинная сторона при извлечении фич")
-    parser.add_argument("--min-matches", type=int, default=None, help="минимум матчей в паре, чтобы её сохранить")
-    parser.add_argument(
-        "--num-threads",
-        type=int,
-        default=None,
-        help="потоки COLMAP-маппера (-1 — все)",
-    )
-    parser.add_argument("--verbose", "-v", action="store_true", help="DEBUG-логирование этапов")
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    return parser
-
-
-def _load_params(args: argparse.Namespace) -> dict[str, Any]:
+def _load_params(options: dict[str, Any]) -> dict[str, Any]:
     """
     Merge optional --config defaults with the explicit CLI flags into the pipeline cfg.
 
@@ -126,33 +45,29 @@ def _load_params(args: argparse.Namespace) -> dict[str, Any]:
     (cluster_distance/min_cluster_size/linkage) are resolved from the checkpoint in
     pipeline.resolve_model_params; here they stay None unless passed explicitly.
     """
-    config_path = Path(args.config) if args.config else None
+    config_path = Path(options["config"]) if options["config"] else None
     defaults = OmegaConf.to_container(OmegaConf.load(config_path)) if config_path and config_path.is_file() else {}
     if not isinstance(defaults, dict):
         raise PipelineError(f"--config {config_path}: ожидался словарь")
     geometry = defaults.get("geometry", {})
 
     def value_or(key: str, fallback: Any) -> Any:
-        return getattr(args, key) if getattr(args, key) is not None else defaults.get(key, fallback)
+        return options[key] if options[key] is not None else defaults.get(key, fallback)
 
-    geometry_overrides = {
-        key: getattr(args, key)
-        for key in ("neighbors", "max_keypoints", "resize", "min_matches", "num_threads")
-        if getattr(args, key) is not None
-    }
+    geometry_overrides = {key: options[key] for key in _GEOMETRY_FLAGS if options[key] is not None}
 
-    output = Path(args.output)
+    output = Path(options["output"])
     cfg: dict[str, Any] = {
-        "input_dirs": args.input_dir,
+        "input_dirs": list(options["input_dirs"]),
         "output": str(output),
-        "cache_dir": args.cache_dir or str(output.parent / (output.name + ".cache")),
-        "device": args.device,
-        "checkpoint": args.checkpoint or defaults.get("checkpoint", DEFAULT_CHECKPOINT),
-        "batch_size": value_or("batch_size", 32),
-        "num_workers": value_or("num_workers", 0),
-        "cluster_distance": args.cluster_distance,
-        "min_cluster_size": args.min_cluster_size,
-        "linkage": args.linkage,
+        "cache_dir": options["cache_dir"] or str(output.parent / (output.name + ".cache")),
+        "device": options["device"],
+        "checkpoint": options["checkpoint"] or defaults.get("checkpoint", DEFAULT_CHECKPOINT),
+        "batch_size": value_or("batch_size", DEFAULT_BATCH_SIZE),
+        "num_workers": value_or("num_workers", DEFAULT_NUM_WORKERS),
+        "cluster_distance": options["cluster_distance"],
+        "min_cluster_size": options["min_cluster_size"],
+        "linkage": options["linkage"],
         "image_extensions": defaults.get("image_extensions", [".png", ".jpg", ".jpeg"]),
         "geometry": geometry | geometry_overrides,
     }
@@ -168,30 +83,82 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+@click.command(name="reconstruct", context_settings={"help_option_names": ["-h", "--help"]})
+@click.option(
+    "--input-dir",
+    "input_dirs",
+    metavar="DIR",
+    multiple=True,
+    required=True,
+    help="папка с изображениями; подпапки = датасеты (как data/test), картинки в корне "
+    "= один датасет с именем папки; можно передавать несколько раз",
+)
+@click.option("--output", required=True, metavar="FILE", help="куда записать итоговый JSON")
+@click.option(
+    "--config",
+    default=None,
+    metavar="YAML",
+    help="yaml с дефолтами geometry/batch (параметры модели и кластеризации берутся из --checkpoint)",
+)
+@click.option(
+    "--checkpoint",
+    default=None,
+    metavar="PT",
+    help=f"чекпоинт модели (default: {DEFAULT_CHECKPOINT})",
+)
+@click.option(
+    "--cache-dir",
+    default=None,
+    metavar="DIR",
+    help="папка промежуточных результатов (default: <output>.cache)",
+)
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="продолжить с последнего этапа из кэша, а не пересчитывать всё",
+)
+@click.option(
+    "--output-csv",
+    default=None,
+    metavar="CSV",
+    help="дополнительно записать submission.csv соревнования (format infer.py)",
+)
+@click.option("--device", default=None, help="cuda / cpu (default: cuda если есть)")
+@click.option("--batch-size", type=int, default=None, help="батч DINOv2-эмбеддингов")
+@click.option("--num-workers", type=int, default=None, help="воркеры DataLoader эмбеддингов")
+@click.option("--cluster-distance", type=float, default=None, help="порог косинусного расстояния кластеризации")
+@click.option("--min-cluster-size", type=int, default=None, help="кластеры меньше — выбросы")
+@click.option("--linkage", default=None, help="связывание агломеративной кластеризации (default: из чекпоинта)")
+@click.option("--neighbors", type=int, default=None, help="число ближайших картинок по эмбеддингу для матчинга")
+@click.option("--max-keypoints", type=int, default=None, help="максимум ALIKED-ключей на картинку")
+@click.option("--resize", type=int, default=None, help="длинная сторона при извлечении фич")
+@click.option("--min-matches", type=int, default=None, help="минимум матчей в паре, чтобы её сохранить")
+@click.option("--num-threads", type=int, default=None, help="потоки COLMAP-маппера (-1 — все)")
+@click.option("--verbose", "-v", is_flag=True, help="DEBUG-логирование этапов")
+@click.version_option(__version__, prog_name="reconstruct")
+def reconstruct(**options: Any) -> int:
     """
-    CLI entry point.
+    Сгруппировать изображения по сценам и восстановить позы камер; результат — JSON.
 
     Returns
     -------
     process exit code: 0 ok, 2 usage/cache error, 1 unexpected failure
 
     """
-    args = build_parser().parse_args(argv)
-    _setup_logging(args.verbose)
-    cache_hint = args.cache_dir or f"{args.output}.cache"
+    _setup_logging(options["verbose"])
+    cache_hint = options["cache_dir"] or f"{options['output']}.cache"
     try:
-        cfg = _load_params(args)
-        result = run(cfg, resume=args.resume)
+        cfg = _load_params(options)
+        result = run(cfg, resume=options["resume"])
         write_json(result, Path(cfg["output"]))
         logger.info("result JSON: %s", cfg["output"])
-        if args.output_csv:
-            csv_path = Path(args.output_csv)
+        if options["output_csv"]:
+            csv_path = Path(options["output_csv"])
             to_submission_csv(result).to_csv(csv_path, index=False)
             logger.info("submission CSV: %s", csv_path)
         return 0
-    except (PipelineError, ContractError, FileNotFoundError) as e:
-        logger.error("%s", e)
+    except (PipelineError, ContractError, FileNotFoundError) as error:
+        logger.error("%s", error)
         return 2
     except KeyboardInterrupt:
         logger.error("прервано пользователем; прогресс в кэше %s — продолжите с --resume", cache_hint)
@@ -199,6 +166,23 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:  # noqa: BLE001
         logger.exception("unexpected failure")
         return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    """
+    Entry point kept callable for tests: invoke the click command and map its exits.
+
+    Click's usage errors (missing --input-dir/--output, bad types) exit 2, matching
+    the argparse-era contract; the command itself returns 0/1/2/130.
+    """
+    try:
+        exit_code = reconstruct.main(args=argv, prog_name="reconstruct", standalone_mode=False)
+    except click.UsageError as usage_error:
+        usage_error.show()
+        return 2
+    except click.exceptions.Exit as exit_exception:  # --help / --version
+        return int(exit_exception.exit_code)
+    return int(exit_code or 0)
 
 
 def run_console() -> None:
