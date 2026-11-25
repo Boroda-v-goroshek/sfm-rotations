@@ -239,8 +239,6 @@ python -m sfm_rotations.train --help
 
 Артефакт модели — `checkpoints/<run>/best.pt`, выбранный по `imc/score`. Он самодостаточен: внутри веса, `model_config` (backbone, pooling, image_size — по ним модель пересобирается без внешнего конфига) и `postprocess` (пороги кластеризации). Публикация — `dvc add` + `dvc push` (см. «Работа с DVC»). Для инференса нужны только pip-пакет и файл чекпоинта.
 
-> Экспорт в ONNX/TensorRT и inference-сервер — в планах.
-
 ## Инференс (Infer)
 
 > Для разовых прогонов на своей папке фотографий используйте [CLI reconstruct](#cli-reconstruct) —
