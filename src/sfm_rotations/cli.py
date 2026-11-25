@@ -26,7 +26,10 @@ from sfm_rotations.pipeline import write_json
 
 logger = logging.getLogger("reconstruct")
 
-DEFAULT_CONFIG = Path("configs/baseline_infer.yaml")
+# Дефолтный чекпоинт: baseline (dinov2-base). backbone/pooling/image_size и пороги
+# кластеризации берутся из самого чекпоинта (model_config/postprocess), как в infer.py;
+# --config опционален и нужен, чтобы задать свои дефолты geometry/batch.
+DEFAULT_CHECKPOINT = "checkpoints/baseline/best.pt"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,15 +56,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, metavar="FILE", help="куда записать итоговый JSON")
     parser.add_argument(
         "--config",
-        default=str(DEFAULT_CONFIG),
+        default=None,
         metavar="YAML",
-        help=f"yaml с параметрами по умолчанию (default: {DEFAULT_CONFIG})",
+        help="yaml с дефолтами geometry/batch (параметры модели и кластеризации берутся из --checkpoint)",
     )
     parser.add_argument(
         "--checkpoint",
         default=None,
         metavar="PT",
-        help="чекпоинт модели (default: checkpoint из --config)",
+        help=f"чекпоинт модели (default: {DEFAULT_CHECKPOINT})",
     )
     parser.add_argument(
         "--cache-dir",
@@ -91,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--min-cluster-size", type=int, default=None, help="кластеры меньше — выбросы")
     parser.add_argument(
+        "--linkage",
+        default=None,
+        help="связывание агломеративной кластеризации (default: из чекпоинта)",
+    )
+    parser.add_argument(
         "--neighbors",
         type=int,
         default=None,
@@ -112,36 +120,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _load_params(args: argparse.Namespace) -> dict[str, Any]:
     """
-    Merge defaults from --config with the explicit CLI flags into the pipeline cfg.
+    Merge optional --config defaults with the explicit CLI flags into the pipeline cfg.
 
-    Parameters
-    ----------
-    args:
-        parsed CLI arguments.
-
-    Returns
-    -------
-    cfg dict for pipeline.run
-
+    Model architecture (backbone/embedding_dim/image_size) and clustering defaults
+    (cluster_distance/min_cluster_size/linkage) are resolved from the checkpoint in
+    pipeline.resolve_model_params; here they stay None unless passed explicitly.
     """
-    config_path = Path(args.config)
-    defaults = OmegaConf.to_container(OmegaConf.load(config_path)) if config_path.is_file() else {}
+    config_path = Path(args.config) if args.config else None
+    defaults = OmegaConf.to_container(OmegaConf.load(config_path)) if config_path and config_path.is_file() else {}
     if not isinstance(defaults, dict):
         raise PipelineError(f"--config {config_path}: ожидался словарь")
     geometry = defaults.get("geometry", {})
 
-    overrides = {
-        key: getattr(args, key)
-        for key in (
-            "device",
-            "batch_size",
-            "num_workers",
-            "cluster_distance",
-            "min_cluster_size",
-            "checkpoint",
-        )
-        if getattr(args, key) is not None
-    }
+    def value_or(key: str, fallback: Any) -> Any:
+        return getattr(args, key) if getattr(args, key) is not None else defaults.get(key, fallback)
+
     geometry_overrides = {
         key: getattr(args, key)
         for key in ("neighbors", "max_keypoints", "resize", "min_matches", "num_threads")
@@ -154,13 +147,12 @@ def _load_params(args: argparse.Namespace) -> dict[str, Any]:
         "output": str(output),
         "cache_dir": args.cache_dir or str(output.parent / (output.name + ".cache")),
         "device": args.device,
-        "checkpoint": overrides.pop("checkpoint", defaults.get("checkpoint", "checkpoints/baseline/best.pt")),
-        "backbone": defaults.get("backbone", "facebook/dinov2-base"),
-        "embedding_dim": defaults.get("embedding_dim", 256),
-        "batch_size": overrides.pop("batch_size", defaults.get("batch_size", 32)),
-        "num_workers": overrides.pop("num_workers", defaults.get("num_workers", 0)),
-        "cluster_distance": overrides.pop("cluster_distance", defaults.get("cluster_distance", 0.3)),
-        "min_cluster_size": overrides.pop("min_cluster_size", defaults.get("min_cluster_size", 3)),
+        "checkpoint": args.checkpoint or defaults.get("checkpoint", DEFAULT_CHECKPOINT),
+        "batch_size": value_or("batch_size", 32),
+        "num_workers": value_or("num_workers", 0),
+        "cluster_distance": args.cluster_distance,
+        "min_cluster_size": args.min_cluster_size,
+        "linkage": args.linkage,
         "image_extensions": defaults.get("image_extensions", [".png", ".jpg", ".jpeg"]),
         "geometry": geometry | geometry_overrides,
     }

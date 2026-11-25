@@ -25,7 +25,6 @@ from tests.contracts.synthetic import TinyAutoModel
 from tests.contracts.synthetic import write_image
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-INFER_CONFIG = REPO_ROOT / "configs" / "baseline_infer.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -35,13 +34,25 @@ INFER_CONFIG = REPO_ROOT / "configs" / "baseline_infer.yaml"
 
 @pytest.fixture
 def tiny_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Случайный tiny-DINOv2, завёрнутый как чекпоинт для infer.load_model."""
+    """
+    Случайный tiny-DINOv2, завёрнутый как чекпоинт для infer.load_model.
+
+    Несёт model_config и postprocess, как чекпоинты train.py на main: из них
+    pipeline берёт backbone/embedding_dim/image_size и пороги кластеризации.
+    """
     from sfm_rotations import model as model_module
     from sfm_rotations.model import SfMModel
 
     monkeypatch.setattr(model_module, "AutoModel", TinyAutoModel)
     path = tmp_path / "tiny.pt"
-    torch.save({"model": SfMModel(embedding_dim=256).state_dict()}, path)
+    torch.save(
+        {
+            "model": SfMModel(embedding_dim=256).state_dict(),
+            "model_config": {"backbone": "tiny", "embedding_dim": 256, "pooling": "cls", "image_size": 224},
+            "postprocess": {"cluster_distance": 0.3, "min_cluster_size": 3, "linkage": "average"},
+        },
+        path,
+    )
     return path
 
 
@@ -55,7 +66,7 @@ def fake_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
     на управляемых эмбеддингах. load_model при этом остаётся настоящим.
     """
 
-    def fake(model: object, image_paths: list[Path], cfg: object, device: str) -> np.ndarray:
+    def fake(model: object, image_paths: list[Path], image_size: int, cfg: object, device: str) -> np.ndarray:
         from PIL import Image
 
         vectors = []
@@ -146,8 +157,6 @@ def base_args(input_dir: Path, output: Path, checkpoint: Path) -> list[str]:
         str(input_dir),
         "--output",
         str(output),
-        "--config",
-        str(INFER_CONFIG),
         "--checkpoint",
         str(checkpoint),
         "--device",

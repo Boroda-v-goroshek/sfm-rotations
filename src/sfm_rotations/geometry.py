@@ -11,6 +11,7 @@ groups images into clusters, and each cluster is reconstructed geometrically:
 Images the mapper does not register get NaN poses.
 """
 
+import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path

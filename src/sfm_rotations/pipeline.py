@@ -43,6 +43,70 @@ CACHE_CLUSTERS_NAME = "clusters.json"
 CACHE_CLUSTER_PREFIX = "cluster-"
 
 
+def load_checkpoint_meta(checkpoint_path: str | Path) -> dict[str, Any]:
+    """
+    Read a checkpoint dict without building the model: its model_config and postprocess.
+
+    The same weights_only dance as infer.load_model (checkpoints from train.py carry
+    numpy scalars torch>=2.6 rejects by default), and the same fallback to
+    checkpoints/dinov2-large/best.pt for old checkpoints without model_config, so that
+    the metadata matches the weights infer.load_model will actually load.
+    """
+    path = Path(checkpoint_path)
+    if not path.is_file():
+        raise PipelineError(f"Нет чекпоинта {path}")
+    try:
+        checkpoint = torch.load(path, map_location="cpu")
+    except Exception:
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(checkpoint, dict):
+        raise PipelineError(f"чекпоинт {path}: ожидался dict")
+
+    if "model_config" not in checkpoint:
+        alt_path = Path("checkpoints/dinov2-large/best.pt")
+        if not alt_path.exists():
+            raise PipelineError(
+                f"В чекпоинте {path} нет 'model_config' (старый формат) и нет "
+                "checkpoints/dinov2-large/best.pt; укажите актуальный чекпоинт (--checkpoint).",
+            )
+        logger.warning(
+            "чекпоинт %s: нет 'model_config' (старый формат), берём метаданные из %s",
+            path,
+            alt_path,
+        )
+        checkpoint = load_checkpoint_meta(alt_path)
+        return checkpoint
+
+    return {
+        "model_config": checkpoint["model_config"],
+        "postprocess": checkpoint.get("postprocess", {}),
+    }
+
+
+def resolve_model_params(cfg: dict[str, Any]) -> dict[str, Any]:
+    """
+    Take model and clustering defaults from the checkpoint, explicit CLI values win.
+
+    Mirrors infer.py on main: backbone/embedding_dim/pooling/image_size are rebuilt
+    from checkpoint['model_config'], cluster_distance/min_cluster_size/linkage come
+    from checkpoint['postprocess'] unless the user passed them. Returns a copy of cfg
+    with resolved values plus '_checkpoint_meta' for the cache fingerprint and meta.
+    """
+    resolved = dict(cfg)
+    meta = load_checkpoint_meta(cfg["checkpoint"])
+    model_config = meta["model_config"]
+    postprocess = meta["postprocess"]
+
+    resolved["backbone"] = model_config["backbone"]
+    resolved["embedding_dim"] = model_config["embedding_dim"]
+    resolved["image_size"] = model_config.get("image_size", 224)
+    for key, fallback in (("cluster_distance", 0.3), ("min_cluster_size", 3), ("linkage", "average")):
+        if resolved.get(key) is None:
+            resolved[key] = postprocess.get(key, fallback)
+    resolved["_checkpoint_meta"] = meta
+    return resolved
+
+
 def _make_reconstructor(geometry_cfg: dict[str, Any], device: str) -> Any:
     """
     Build the geometric reconstructor, importing heavy optional deps lazily.
@@ -498,15 +562,16 @@ def _stage_clusters(
         return clusters
 
     logger.info(
-        "stage clusters: agglomerative cosine within each dataset (distance=%s, min_size=%s)",
+        "stage clusters: agglomerative cosine within each dataset (distance=%s, min_size=%s, linkage=%s)",
         cfg["cluster_distance"],
         cfg["min_cluster_size"],
+        cfg["linkage"],
     )
     clusters = {}
     offset = 0
     for name, entry in datasets.items():
         local = embeddings[offset : offset + len(entry["paths"])]
-        clusters[name] = cluster_embeddings(local, cfg["cluster_distance"], cfg["min_cluster_size"])
+        clusters[name] = cluster_embeddings(local, cfg["cluster_distance"], cfg["min_cluster_size"], cfg["linkage"])
         offset += len(entry["paths"])
     _json_dump(clusters_path, {name: values.tolist() for name, values in clusters.items()})
     return clusters
@@ -651,8 +716,9 @@ def run(cfg: dict[str, Any], resume: bool) -> dict[str, Any]:
         )
 
     all_paths = [path for entry in datasets.values() for path in entry["paths"]]
+    cfg = resolve_model_params(cfg)
     fingerprint_params = {
-        key: cfg[key] for key in ("cluster_distance", "min_cluster_size", "backbone", "embedding_dim")
+        key: cfg[key] for key in ("cluster_distance", "min_cluster_size", "linkage", "backbone", "embedding_dim")
     } | {
         f"geometry.{key}": value
         for key, value in cfg["geometry"].items()
@@ -678,7 +744,8 @@ def run(cfg: dict[str, Any], resume: bool) -> dict[str, Any]:
         from sfm_rotations.infer import compute_embeddings
         from sfm_rotations.infer import load_model
 
-        return compute_embeddings(load_model(omega_cfg, device), all_paths, omega_cfg, device)
+        model, _ = load_model(omega_cfg, device)
+        return compute_embeddings(model, all_paths, cfg["image_size"], omega_cfg, device)
 
     embeddings = _stage_embeddings(cache_dir, all_paths, resume, device, compute)
     clusters = _stage_clusters(cache_dir, datasets, embeddings, cfg, resume)
@@ -690,6 +757,7 @@ def run(cfg: dict[str, Any], resume: bool) -> dict[str, Any]:
         "input_dirs": [str(Path(path).resolve()) for path in cfg["input_dirs"]],
         "device": device,
         "checkpoint": str(Path(cfg["checkpoint"]).resolve()),
+        "model_config": cfg["_checkpoint_meta"]["model_config"],
         "params": fingerprint_params,
         "cache_dir": str(cache_dir.resolve()),
         "cache_fingerprint": fingerprint,
