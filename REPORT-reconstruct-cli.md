@@ -2,7 +2,7 @@
 
 Ветка: `feat/reconstruct-cli` (1 коммит `3193540`, main не тронут — откатан до origin/main)
 
----
+______________________________________________________________________
 
 ## 1. Что за репозиторий (разбор)
 
@@ -13,30 +13,31 @@
 
 1. **Вход:** `data/test/<dataset>/*.png` (layout соревнования: датасеты → папки, внутри картинки;
    сцены в разметке test неизвестны — их надо найти).
-2. **Эмбеддинги** (`infer.py` + `model.py`): DINOv2-base с SupCon-head (чекпоинт
+1. **Эмбеддинги** (`infer.py` + `model.py`): DINOv2-base с SupCon-head (чекпоинт
    `checkpoints/baseline/best.pt`, DVC ~700 МБ) → L2-нормированный вектор [N, 256] на картинку.
    Модель дообучена в `train.py` (supervised contrastive loss, батч-сэмплер из `data.py`
    собирает батчи из 7 сцен + outliers).
-3. **Кластеризация** (`metrics.cluster_embeddings`): agglomerative clustering, cosine distance,
+1. **Кластеризация** (`metrics.cluster_embeddings`): agglomerative clustering, cosine distance,
    порог `cluster_distance=0.3`; кластеры меньше `min_cluster_size=3` → `outliers` (-1).
    Кластеризация строго **внутри датасета**.
-4. **Позы** (`geometry.py`): для каждого кластера: shortlist пар поcosine-сходству эмбеддингов
+1. **Позы** (`geometry.py`): для каждого кластера: shortlist пар поcosine-сходству эмбеддингов
    (top-`neighbors`=20) → ALIKED keypoint'ы (max 2048, resize 1024) → LightGlue матчи
    (мин. 15, геоверификация) → инкрементальный COLMAP-mapper (`pycolmap`) → для каждой картинки
    R (3×3) и t (3); незарегистрированные mapper’ом остаются в кластере с NaN.
-5. **Выход:** `submission.csv` — `dataset,scene,image,rotation_matrix` (9 чисел `;`-split),
+1. **Выход:** `submission.csv` — `dataset,scene,image,rotation_matrix` (9 чисел `;`-split),
    `translation_vector` (3). У outliers — nan'ы.
-6. **Метрики** (`evaluate.py`, `metrics.py`): imc/score (основная по протоколу), rot mAA, ARI —
+1. **Метрики** (`evaluate.py`, `metrics.py`): imc/score (основная по протоколу), rot mAA, ARI —
    на замороженном val-сплите (`contracts/val_split.json`, протокол v2).
-7. **Контракты** (`contracts.py` + `tests/contracts/`): жёсткие проверки формата CSV, метрик,
+1. **Контракты** (`contracts.py` + `tests/contracts/`): жёсткие проверки формата CSV, метрик,
    протокола; тесты гоняются на tiny-синтетике без весов/GPU.
 
 ### Инфраструктура репо
+
 - `uv` для зависимостей (Python 3.10), hydra-конфиги `configs/baseline_{train,infer}.yaml`.
 - DVC: данные и веса (`dvc pull`, remote ssh://aboba@217.60.0.116).
 - pre-commit: ruff check+format, pyright, yamllint, commitizen (conventional commits).
 
----
+______________________________________________________________________
 
 ## 2. Что сделано: CLI `reconstruct`
 
@@ -46,20 +47,20 @@
 reconstruct --input-dir data/group_01/ --output result.json --num-threads 1 [-v]
 ```
 
-| Флаг | Значение |
-|---|---|
-| `--input-dir DIR` (×N) | папка с фото; **подпапки = датасеты** (layout data/test), картинки в корне = один датасет с именем папки; можно несколько |
-| `--output FILE` | итоговый JSON (обязательный) |
-| `--resume` | продолжить с последнего сохранённого этапа из кэша |
-| `--cache-dir DIR` | куда класть промежуточные результаты (default `<output>.cache`) |
-| `--output-csv FILE` | дополнительно submission.csv в формате соревнования |
-| `--config YAML` | yaml с параметрами (default `configs/baseline_infer.yaml`) |
-| `--checkpoint PT` | чекпоинт модели |
-| `--device / --batch-size / --num-workers` | исполнение эмбеддингов |
-| `--cluster-distance / --min-cluster-size` | кластеризация |
-| `--neighbors / --max-keypoints / --resize / --min-matches` | матчинг/фичи |
-| `--num-threads N` | потоки COLMAP-маппера (на mac: 1) |
-| `-v/--verbose` | DEBUG-лог; `--version` |
+| Флаг                                                       | Значение                                                                                                                  |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `--input-dir DIR` (×N)                                     | папка с фото; **подпапки = датасеты** (layout data/test), картинки в корне = один датасет с именем папки; можно несколько |
+| `--output FILE`                                            | итоговый JSON (обязательный)                                                                                              |
+| `--resume`                                                 | продолжить с последнего сохранённого этапа из кэша                                                                        |
+| `--cache-dir DIR`                                          | куда класть промежуточные результаты (default `<output>.cache`)                                                           |
+| `--output-csv FILE`                                        | дополнительно submission.csv в формате соревнования                                                                       |
+| `--config YAML`                                            | yaml с параметрами (default `configs/baseline_infer.yaml`)                                                                |
+| `--checkpoint PT`                                          | чекпоинт модели                                                                                                           |
+| `--device / --batch-size / --num-workers`                  | исполнение эмбеддингов                                                                                                    |
+| `--cluster-distance / --min-cluster-size`                  | кластеризация                                                                                                             |
+| `--neighbors / --max-keypoints / --resize / --min-matches` | матчинг/фичи                                                                                                              |
+| `--num-threads N`                                          | потоки COLMAP-маппера (на mac: 1)                                                                                         |
+| `-v/--verbose`                                             | DEBUG-лог; `--version`                                                                                                    |
 
 Коды выхода: `0` ок, `2` ошибка использования/кэша, `1` непредвиденная, `130` Ctrl+C
 (в сообщении путь к кэшу и подсказка про `--resume`).
@@ -71,13 +72,15 @@ discover → embeddings → clusters → poses (по кластерам) → res
 ```
 
 в `--cache-dir`:
+
 - `fingerprint.json` — sha256 от (версия, список картинок относительно input-dir, backbone,
-  embedding_dim, cluster_distance, min_cluster_size, geometry.* кроме num_threads);
+  embedding_dim, cluster_distance, min_cluster_size, geometry.\* кроме num_threads);
 - `embeddings.npz` — [N,256];
 - `clusters.json` — id кластеров;
 - `cluster-<dataset>__<k>.json` — позы одного кластера (с fingerprint + списком картинок кластера).
 
 Поведение:
+
 - `--resume`: fingerprint совпал → готовые этапы читаются с диска (проверено: повторный прогон
   73 фото — **1.7 сек** против ~10 мин). Fingerprint не совпал → **ошибка** (resume честно
   отказывается продолжать про другие данные).
@@ -123,7 +126,7 @@ R (det=+1, проверяется `is_rotation`); у незарегистрир�
   `__init__.py` — `__version__`.
 - `tests/test_reconstruct_cli.py` — 8 тестов (см. §4).
 
----
+______________________________________________________________________
 
 ## 3. Найденные и исправленные реальные баги (попали в коммит)
 
@@ -131,21 +134,21 @@ R (det=+1, проверяется `is_rotation`); у незарегистрир�
    `weights_only=True`, а в `best.pt` в `metrics` лежат numpy-скаляры — `UnpicklingError`.
    Фикс: `weights_only=False` в `infer.load_model` (чекпоинт создаётся этим же train.py
    и лежит в доверенном DVC-remote).
-2. **Abort на старте CLI (macOS/arm64).** torch и pycolmap статически линкуют каждый свой libomp;
+1. **Abort на старте CLI (macOS/arm64).** torch и pycolmap статически линкуют каждый свой libomp;
    при совместном импорте — `OMP: Error #15` и SIGABRT. Фикс: `KMP_DUPLICATE_LIB_OK=TRUE`
    до импорта pycolmap в `geometry.py`.
-3. **pycolmap mapper SIGSEGV в многопоточном режиме** (mapper `num_threads=-1`) на большом
+1. **pycolmap mapper SIGSEGV в многопоточном режиме** (mapper `num_threads=-1`) на большом
    кластере stairs (51 фото, arm64 build). С `--num-threads 1` всё считается чисто.
    Лечится на стороне запуска; `num_threads` поэтому исключён из fingerprint кэша.
    **Рекомендация для mac: всегда `--num-threads 1`.**
-4. **DVC не принимал `checkpoints/baseline.dvc` как цель pull** — файл попадал под
+1. **DVC не принимал `checkpoints/baseline.dvc` как цель pull** — файл попадал под
    `.gitignore` (`checkpoints/`). Фикс: `checkpoints/*` + `!checkpoints/*.dvc`.
 
 Локальные настройки (не в гите): `dvc remote modify sfm-dvc keyfile ~/.ssh/ml_server --local`
 и `dvc config --local cache.dir ./.dvc/cache` — лежат в `.dvc/config.local`, DVC и git его игнорируют.
 (Первоначально cache.dir попал в общий `.dvc/config` — вернула как было.)
 
----
+______________________________________________________________________
 
 ## 4. Проверки
 
@@ -164,7 +167,7 @@ R (det=+1, проверяется `is_rotation`); у незарегистрир�
   экспорт CSV прошёл `validate_submission`. `--resume` — 1.7 сек.
 - CLI-разведка: `reconstruct --version`, `--help`, коды выхода на битых входах.
 
----
+______________________________________________________________________
 
 ## 5. Очистка и коммит
 
@@ -174,6 +177,7 @@ R (det=+1, проверяется `is_rotation`); у незарегистрир�
 
 Коммит `3193540` в **`feat/reconstruct-cli`** (main откатан к origin/main):
 10 файлов, +1276/−4:
+
 ```
 M  .gitignore                     # checkpoints/* + !*.dvc
 M  pyproject.toml                 # [project.scripts] reconstruct
